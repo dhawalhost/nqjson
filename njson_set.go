@@ -150,6 +150,17 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 				}
 			}
 		} else if !opts.MergeObjects && !opts.MergeArrays {
+			// Ultra-fast path for simple single-key operations
+			if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
+				// Try fast replace first (existing key)
+				if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
+					return fast, nil
+				}
+				// Try fast add if replace failed (new key)
+				if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
+					return fast, nil
+				}
+			}
 			// Replacement of existing value
 			if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
 				return fast, nil
@@ -159,10 +170,10 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 				if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
 					return fast, nil
 				}
-				// Deep create nested objects quickly for dot-only object paths
-				if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
-					return fast, nil
-				}
+			}
+			// Deep create nested objects quickly for dot-only object paths (allow for pretty JSON)
+			if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
+				return fast, nil
 			}
 		}
 		// Fallback to generic simple setter which handles creation/merge/deletion with pretty output
@@ -432,12 +443,12 @@ func setFastReplace(data []byte, path string, value interface{}) ([]byte, bool, 
 		}
 
 		// Simple key
-	s, e := getObjectValueRange(window, part)
-	if s < 0 {
+		s, e := getObjectValueRange(window, part)
+		if s < 0 {
 			return nil, false, nil
 		}
-	baseOffset += s
-	window = window[s:e]
+		baseOffset += s
+		window = window[s:e]
 		if isLast {
 			valueStart = baseOffset
 			valueEnd = valueStart + len(window)
@@ -555,12 +566,12 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 		}
 
 		// simple key
-	s, e := getObjectValueRange(window, part)
-	if s < 0 {
+		s, e := getObjectValueRange(window, part)
+		if s < 0 {
 			return nil, false, nil
 		}
-	baseOffset += s
-	window = window[s:e]
+		baseOffset += s
+		window = window[s:e]
 		_ = i
 	}
 
@@ -705,23 +716,451 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 
 // setFastDeepCreateObjects creates missing nested object keys for dot-only object paths on compact JSON.
 // e.g., set "a.b.c" when a exists as object but b/c are missing. It inserts {"b":{"c":value}} in one splice.
-func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]byte, bool, error) {
-	if len(data) == 0 || isLikelyPretty(data) {
+// quickKeyExists does a fast scan to check if a key exists at the root level of an object
+func quickKeyExists(data []byte, key string) bool {
+	// Skip to opening brace
+	i := 0
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+	if i >= len(data) || data[i] != '{' {
+		return false
+	}
+	i++
+
+	// Optimized scan: only check at key positions, not every byte
+	keyLen := len(key)
+	for i < len(data) {
+		// Skip whitespace
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) {
+			break
+		}
+
+		// End of object?
+		if data[i] == '}' {
+			break
+		}
+
+		// Expect a key (quoted string)
+		if data[i] != '"' {
+			return false
+		}
+		i++
+
+		keyStart := i
+		// Find end of key
+		for i < len(data) && data[i] != '"' {
+			if data[i] == '\\' {
+				i++ // Skip escaped character
+			}
+			i++
+		}
+		if i >= len(data) {
+			return false
+		}
+
+		// Check if this key matches
+		currentKeyLen := i - keyStart
+		if currentKeyLen == keyLen && bytes.Equal(data[keyStart:i], []byte(key)) {
+			return true
+		}
+
+		i++ // Skip closing quote
+
+		// Skip to colon
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) || data[i] != ':' {
+			return false
+		}
+		i++
+
+		// Skip value (we don't care about the value)
+		valueEnd := findValueEnd(data, i)
+		if valueEnd == -1 {
+			return false
+		}
+		i = valueEnd
+
+		// Skip to comma or end of object
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) {
+			break
+		}
+		if data[i] == '}' {
+			break
+		}
+		if data[i] == ',' {
+			i++
+		} else {
+			break
+		}
+	}
+	return false
+}
+
+// buildPureNestedPath builds a completely new nested path without any existing components
+func buildPureNestedPath(data []byte, path string, value interface{}) ([]byte, bool, error) {
+	// Encode the value
+	encVal, err := fastEncodeJSONValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Build nested structure directly without intermediate parsing
+	// For "preferences.theme.colors.primary" -> {"preferences":{"theme":{"colors":{"primary":"value"}}}}
+
+	// Count dots to pre-allocate
+	dotCount := 0
+	for i := 0; i < len(path); i++ {
+		if path[i] == '.' {
+			dotCount++
+		}
+	}
+
+	// Pre-calculate total size more accurately
+	totalSize := len(encVal) + len(path) + (dotCount+1)*5 + dotCount*2 // rough estimate
+	nested := make([]byte, 0, totalSize)
+
+	// Build JSON directly by parsing path inline
+	start := 0
+	depth := 0
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) || path[i] == '.' {
+			if i > start {
+				// Add key
+				nested = append(nested, '"')
+				nested = append(nested, path[start:i]...)
+				nested = append(nested, '"', ':')
+
+				// If this is the last component, add value
+				if i == len(path) {
+					nested = append(nested, encVal...)
+				} else {
+					// Otherwise add opening brace
+					nested = append(nested, '{')
+					depth++
+				}
+			}
+			start = i + 1
+		}
+	}
+
+	// Close all braces
+	for depth > 0 {
+		nested = append(nested, '}')
+		depth--
+	}
+
+	// Find insertion point in the root object using simple scan
+	objStart := 0
+	for objStart < len(data) && data[objStart] <= ' ' {
+		objStart++
+	}
+	if objStart >= len(data) || data[objStart] != '{' {
 		return nil, false, nil
 	}
-	parts := strings.Split(path, ".")
+
+	// Find end of object using simple brace counting
+	objEnd := objStart + 1
+	braceCount := 1
+	for objEnd < len(data) && braceCount > 0 {
+		switch data[objEnd] {
+		case '{':
+			braceCount++
+		case '}':
+			braceCount--
+		case '"':
+			// Skip string contents
+			objEnd++
+			for objEnd < len(data) && data[objEnd] != '"' {
+				if data[objEnd] == '\\' {
+					objEnd++ // Skip escaped character
+				}
+				objEnd++
+			}
+		}
+		objEnd++
+	}
+	if braceCount != 0 {
+		return nil, false, ErrInvalidJSON
+	}
+
+	// Check if object is empty
+	inner := bytes.TrimSpace(data[objStart+1 : objEnd-1])
+	needComma := len(inner) > 0
+
+	// Build result
+	result := make([]byte, 0, len(data)+len(nested)+1)
+	result = append(result, data[:objEnd-1]...)
+	if needComma {
+		result = append(result, ',')
+	}
+	result = append(result, nested...)
+	result = append(result, data[objEnd-1:]...)
+
+	return result, true, nil
+}
+
+// setFastReplaceSimpleKey optimizes the common case of replacing a single key like "name" in an object
+func setFastReplaceSimpleKey(data []byte, key string, value interface{}) ([]byte, bool, error) {
+	if len(data) == 0 || len(key) == 0 {
+		return nil, false, nil
+	}
+
+	// Find the root object
+	i := 0
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+	if i >= len(data) || data[i] != '{' {
+		return nil, false, nil
+	}
+
+	// Use our optimized key finder to locate the key
+	keyStart, valueStart, valueEnd := findKeyValueRange(data, key)
+	if keyStart == -1 {
+		return nil, false, nil // Key doesn't exist, can't replace
+	}
+
+	// Encode the new value
+	encVal, err := fastEncodeJSONValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// If the new value is identical, skip
+	currentValue := data[valueStart:valueEnd]
+	if bytes.Equal(encVal, currentValue) {
+		return data, true, nil
+	}
+
+	// Build result with pre-calculated size
+	result := make([]byte, 0, len(data)-len(currentValue)+len(encVal))
+	result = append(result, data[:valueStart]...)
+	result = append(result, encVal...)
+	result = append(result, data[valueEnd:]...)
+
+	return result, true, nil
+}
+
+// findKeyValueRange finds the position of a key and its value in a JSON object
+// Returns keyStart, valueStart, valueEnd (or -1, -1, -1 if not found)
+func findKeyValueRange(data []byte, key string) (int, int, int) {
+	// Skip to opening brace
+	i := 0
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+	if i >= len(data) || data[i] != '{' {
+		return -1, -1, -1
+	}
+	i++
+
+	keyLen := len(key)
+	for i < len(data) {
+		// Skip whitespace
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) || data[i] == '}' {
+			break
+		}
+
+		// Expect a key (quoted string)
+		if data[i] != '"' {
+			return -1, -1, -1
+		}
+		keyStart := i
+		i++
+
+		keyNameStart := i
+		// Find end of key
+		for i < len(data) && data[i] != '"' {
+			if data[i] == '\\' {
+				i++ // Skip escaped character
+			}
+			i++
+		}
+		if i >= len(data) {
+			return -1, -1, -1
+		}
+
+		// Check if this key matches
+		currentKeyLen := i - keyNameStart
+		if currentKeyLen == keyLen && bytes.Equal(data[keyNameStart:i], []byte(key)) {
+			i++ // Skip closing quote
+
+			// Skip to colon
+			for i < len(data) && data[i] <= ' ' {
+				i++
+			}
+			if i >= len(data) || data[i] != ':' {
+				return -1, -1, -1
+			}
+			i++
+
+			// Skip whitespace after colon
+			for i < len(data) && data[i] <= ' ' {
+				i++
+			}
+
+			valueStart := i
+			valueEnd := findValueEnd(data, i)
+			if valueEnd == -1 {
+				return -1, -1, -1
+			}
+
+			return keyStart, valueStart, valueEnd
+		}
+
+		i++ // Skip closing quote
+
+		// Skip to colon
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) || data[i] != ':' {
+			return -1, -1, -1
+		}
+		i++
+
+		// Skip value
+		valueEnd := findValueEnd(data, i)
+		if valueEnd == -1 {
+			return -1, -1, -1
+		}
+		i = valueEnd
+
+		// Skip to comma or end of object
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) || data[i] == '}' {
+			break
+		}
+		if data[i] == ',' {
+			i++
+		} else {
+			break
+		}
+	}
+
+	return -1, -1, -1
+}
+
+// setFastAddSimpleKey optimizes the common case of adding a single key like "email" to an object
+func setFastAddSimpleKey(data []byte, key string, value interface{}) ([]byte, bool, error) {
+	if len(data) == 0 || len(key) == 0 {
+		return nil, false, nil
+	}
+
+	// Find the root object
+	i := 0
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+	if i >= len(data) || data[i] != '{' {
+		return nil, false, nil
+	}
+
+	// Quick check: does the key already exist? If so, this isn't an "add"
+	keyStart, _, _ := findKeyValueRange(data, key)
+	if keyStart != -1 {
+		return nil, false, nil // Key exists, can't add
+	}
+
+	// Encode the value efficiently
+	encVal, err := fastEncodeJSONValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Find the end of the object
+	end := findBlockEnd(data, i, '{', '}')
+	if end == -1 {
+		return nil, false, ErrInvalidJSON
+	}
+
+	// Check if object is empty
+	inner := bytes.TrimSpace(data[i+1 : end-1])
+	needComma := len(inner) > 0
+
+	// Build the new key-value pair: "key":value
+	keyValueSize := 1 + len(key) + 2 + len(encVal) // "key":value
+	if needComma {
+		keyValueSize++ // for comma
+	}
+
+	// Build result with pre-calculated size
+	result := make([]byte, 0, len(data)+keyValueSize)
+	result = append(result, data[:end-1]...)
+	if needComma {
+		result = append(result, ',')
+	}
+	result = append(result, '"')
+	result = append(result, key...)
+	result = append(result, '"', ':')
+	result = append(result, encVal...)
+	result = append(result, data[end-1:]...)
+
+	return result, true, nil
+}
+
+func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]byte, bool, error) {
+	if len(data) == 0 {
+		return nil, false, nil
+	}
+
+	// Ultra-fast path for pure deep creation (benchmark optimization)
+	// Check if this is a simple dot-separated path with no existing components
+	// This optimizes for cases like "preferences.theme.colors.primary" where none exist
+	if !strings.Contains(path, "[") && strings.Count(path, ".") >= 2 {
+		// Quick check: if the first component doesn't exist, we can skip path traversal entirely
+		firstDot := strings.IndexByte(path, '.')
+		if firstDot > 0 {
+			firstKey := path[:firstDot]
+			// Do a fast scan to see if first key exists
+			if !quickKeyExists(data, firstKey) {
+				// Pure creation case - build the entire nested structure directly
+				return buildPureNestedPath(data, path, value)
+			}
+		}
+	}
+
+	// Fallback to existing logic for mixed cases
+	parts := make([]string, 0, 4) // Pre-allocate for common depth
+	start := 0
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) || path[i] == '.' {
+			if i > start {
+				part := path[start:i]
+				// Quick validation - only simple object keys supported
+				if part == "" || isAllDigits(part) || strings.Contains(part, "[") {
+					return nil, false, nil
+				}
+				parts = append(parts, part)
+			}
+			start = i + 1
+		}
+	}
+
 	if len(parts) < 2 {
 		return nil, false, nil
 	}
+
 	// Find deepest existing parent object along the path
 	window := data
 	baseOffset := 0
 	lastExisting := -1
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
-		if part == "" || isAllDigits(part) || strings.Contains(part, "[") {
-			return nil, false, nil // only object keys supported
-		}
 		s, e := getObjectValueRange(window, part)
 		if s < 0 { // missing here; parent is current window object
 			lastExisting = i - 1
@@ -767,20 +1206,35 @@ func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]by
 	if err != nil {
 		return nil, false, err
 	}
-	// Build chain from parts[lastExisting+1:]
+
+	// Build the nested structure more efficiently
+	// For "preferences.theme.colors.primary" -> {"preferences":{"theme":{"colors":{"primary":"#336699"}}}}
 	keys := parts[lastExisting+1:]
-	var buf bytes.Buffer
+
+	// Ultra-fast JSON building for nested objects
+	// Calculate exact size needed
+	totalSize := len(encVal)
+	for _, k := range keys {
+		totalSize += len(k) + 5 // "key":{  or }
+	}
+
+	// Build nested objects in one pass using direct byte manipulation
+	nested := make([]byte, 0, totalSize)
 	for i, k := range keys {
-		kb, _ := json.Marshal(k)
-		buf.Write(kb)
-		buf.WriteByte(':')
-		if i < len(keys)-1 {
-			buf.WriteByte('{')
+		nested = append(nested, '"')
+		nested = append(nested, k...)
+		if i == len(keys)-1 {
+			// Last key gets the value
+			nested = append(nested, '"', ':')
+			nested = append(nested, encVal...)
+		} else {
+			// Intermediate keys get opening brace
+			nested = append(nested, '"', ':', '{')
 		}
 	}
-	buf.Write(encVal)
+	// Close all braces
 	for i := 0; i < len(keys)-1; i++ {
-		buf.WriteByte('}')
+		nested = append(nested, '}')
 	}
 	// Splice into parent object
 	// Find end of object
@@ -797,18 +1251,24 @@ func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]by
 	}
 	inner := bytes.TrimSpace(window[ws+1 : endObj-1])
 	needComma := len(inner) > 0
-	insert := make([]byte, 0, len(window)+buf.Len()+3)
-	insert = append(insert, window[:endObj-1]...)
+
+	// Pre-calculate final buffer size to minimize allocations
+	finalSize := len(data) - len(window) + endObj - 1 + len(nested) + parentEnd - parentStart
 	if needComma {
-		insert = append(insert, ',')
+		finalSize++
 	}
-	insert = append(insert, buf.Bytes()...)
-	insert = append(insert, window[endObj-1:]...)
-	out := make([]byte, 0, len(data)-len(window)+len(insert))
-	out = append(out, data[:parentStart]...)
-	out = append(out, insert...)
-	out = append(out, data[parentEnd:]...)
-	return out, true, nil
+
+	// Build result in single allocation
+	result := make([]byte, 0, finalSize)
+	result = append(result, data[:parentStart]...)
+	result = append(result, window[:endObj-1]...)
+	if needComma {
+		result = append(result, ',')
+	}
+	result = append(result, nested...)
+	result = append(result, window[endObj-1:]...)
+	result = append(result, data[parentEnd:]...)
+	return result, true, nil
 }
 
 // fastDelete removes a value at path from compact JSON by splicing bytes.
@@ -871,12 +1331,12 @@ func fastDelete(data []byte, path string) ([]byte, bool, error) {
 			window = window[s:e]
 			continue
 		}
-	s, e := getObjectValueRange(window, part)
-	if s < 0 {
+		s, e := getObjectValueRange(window, part)
+		if s < 0 {
 			return nil, false, nil
 		}
-	baseOffset += s
-	window = window[s:e]
+		baseOffset += s
+		window = window[s:e]
 	}
 
 	// Identify parent container type
@@ -1026,7 +1486,7 @@ func fastEncodeJSONValue(v interface{}) ([]byte, error) {
 	case nil:
 		return []byte("null"), nil
 	case string:
-	return encodeJSONString(val), nil
+		return encodeJSONString(val), nil
 	case bool:
 		if val {
 			return []byte("true"), nil
