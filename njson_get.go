@@ -937,7 +937,32 @@ func fastFindObjectValue(data []byte, key string) (int, int) {
 		}
 
 		// Skip this key-value pair
-		pos = findValueEnd(data, pos)
+		// First, skip the key
+		keyEnd := pos + 1
+		for keyEnd < len(data) && data[keyEnd] != '"' {
+			keyEnd++
+		}
+		if keyEnd >= len(data) {
+			return -1, -1
+		}
+		keyEnd++ // Skip closing quote
+
+		// Skip to colon
+		for keyEnd < len(data) && data[keyEnd] <= ' ' {
+			keyEnd++
+		}
+		if keyEnd >= len(data) || data[keyEnd] != ':' {
+			return -1, -1
+		}
+		keyEnd++ // Skip colon
+
+		// Skip whitespace to get to value
+		for keyEnd < len(data) && data[keyEnd] <= ' ' {
+			keyEnd++
+		}
+
+		// Now call findValueEnd on the actual value position
+		pos = findValueEnd(data, keyEnd)
 		if pos == -1 {
 			return -1, -1
 		}

@@ -1,0 +1,62 @@
+{
+  "Globals": {},
+  "Rules": {
+    "G101": {
+      "pattern": "(?i)passwd|pass|password|pwd|secret|token|pw|apikey|api_key|access_key",
+      "ignore_entropy": false,
+      "entropy_threshold": 80.0,
+      "per_char_threshold": 3.0,
+      "truncate": 32
+    },
+    "G102": {
+      "call_list": [
+        "net/http.ListenAndServe",
+        "net/http.ListenAndServeTLS"
+      ]
+    },
+    "G103": {
+      "package": "unsafe",
+      "call_list": [
+        "Alignof",
+        "Offsetof", 
+        "Sizeof",
+        "Pointer"
+      ]
+    },
+    "G104": {
+      "call_list": [
+        "bytes.Buffer.Write",
+        "bytes.Buffer.WriteByte",
+        "bytes.Buffer.WriteString",
+        "fmt.Print",
+        "fmt.Printf",
+        "fmt.Println",
+        "fmt.Fprint",
+        "fmt.Fprintf",
+        "fmt.Fprintln"
+      ]
+    },
+    "G106": {
+      "call_list": [
+        "net/http.Serve",
+        "net/http.ServeTLS"
+      ]
+    }
+  },
+  "ExcludeGenerated": false,
+  "Severity": "medium",
+  "Confidence": "medium",
+  "Concurrency": 12,
+  "Format": "sarif",
+  "ExcludeRules": [
+    "G103"
+  ],
+  "IncludeRules": [],
+  "Config": {
+    "global": {
+      "nosec": false,
+      "show-ignored": false,
+      "audit": true
+    }
+  }
+}
