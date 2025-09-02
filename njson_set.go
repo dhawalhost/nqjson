@@ -142,7 +142,7 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 
 	// Fast path: byte-level replacement/insert for simple paths (no full unmarshal)
 	if isSimpleSetPath(path) && !opts.ReplaceInPlace {
-		// Fast delete (compact JSON preferred to keep commas simple)
+		// Fast delete (compact JSON only to maintain formatting)
 		if value == nil && !opts.MergeObjects && !opts.MergeArrays {
 			if !isLikelyPretty(json) {
 				if fast, ok, err := fastDelete(json, path); err == nil && ok {
@@ -152,20 +152,22 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 		} else if !opts.MergeObjects && !opts.MergeArrays {
 			// Ultra-fast path for simple single-key operations
 			if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
-				// Try fast replace first (existing key)
+				// Try fast replace first (existing key) - safe for any JSON format since it's in-place
 				if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
 					return fast, nil
 				}
-				// Try fast add if replace failed (new key)
-				if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
-					return fast, nil
+				// Try fast add if replace failed (new key) - compact JSON only to maintain formatting
+				if !isLikelyPretty(json) {
+					if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
+						return fast, nil
+					}
 				}
 			}
 			// Replacement of existing value
 			if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
 				return fast, nil
 			}
-			// Insert new key or append/extend array (compact JSON only)
+			// Insert new key or append/extend array (compact JSON only to maintain formatting)
 			if !isLikelyPretty(json) {
 				if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
 					return fast, nil
@@ -1082,24 +1084,29 @@ func setFastAddSimpleKey(data []byte, key string, value interface{}) ([]byte, bo
 		return nil, false, err
 	}
 
-	// Find the end of the object
-	end := findBlockEnd(data, i, '{', '}')
-	if end == -1 {
-		return nil, false, ErrInvalidJSON
+	// For simple objects, use a much faster approach to find the closing brace
+	// Instead of using findBlockEnd, scan backward from the end
+	end := len(data) - 1
+	for end >= 0 && data[end] <= ' ' {
+		end--
 	}
+	if end < 0 || data[end] != '}' {
+		return nil, false, nil
+	}
+	end++ // Include the closing brace
 
-	// Check if object is empty
-	inner := bytes.TrimSpace(data[i+1 : end-1])
-	needComma := len(inner) > 0
+	// Check if object is empty by looking between first { and last }
+	objStart := i + 1
+	objContent := bytes.TrimSpace(data[objStart : end-1])
+	needComma := len(objContent) > 0
 
-	// Build the new key-value pair: "key":value
-	keyValueSize := 1 + len(key) + 2 + len(encVal) // "key":value
+	// Build result directly - much more efficient than slice operations
+	newSize := len(data) + 1 + len(key) + 2 + len(encVal) // "key":value
 	if needComma {
-		keyValueSize++ // for comma
+		newSize++ // for comma
 	}
 
-	// Build result with pre-calculated size
-	result := make([]byte, 0, len(data)+keyValueSize)
+	result := make([]byte, 0, newSize)
 	result = append(result, data[:end-1]...)
 	if needComma {
 		result = append(result, ',')
@@ -1108,7 +1115,7 @@ func setFastAddSimpleKey(data []byte, key string, value interface{}) ([]byte, bo
 	result = append(result, key...)
 	result = append(result, '"', ':')
 	result = append(result, encVal...)
-	result = append(result, data[end-1:]...)
+	result = append(result, '}')
 
 	return result, true, nil
 }
