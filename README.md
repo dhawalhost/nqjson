@@ -1,4 +1,4 @@
-# njson
+# NJSON
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/njson)](https://goreportcard.com/report/github.com/dhawalhost/njson)
 
