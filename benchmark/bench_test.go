@@ -2,17 +2,22 @@ package njson_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"strconv"
 	"testing"
 
+	"github.com/Jeffail/gabs/v2"
+	"github.com/akshaybharambe14/ijson"
 	"github.com/dhawalhost/njson"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"github.com/valyala/fastjson"
 )
 
 var smallJSON = []byte(`{"name":"John","age":30,"city":"New York"}`)
+var smallJSONParsed interface{}
 
 var mediumJSON = []byte(`{
   "name": "John Smith",
@@ -31,12 +36,17 @@ var mediumJSON = []byte(`{
   "active": true,
   "scores": [95, 87, 92, 78, 85]
 }`)
+var mediumJSONParsed interface{}
 
 var largeJSON []byte
+var largeJSONParsed interface{}
 var complexPaths []string
 var simplePaths []string
 
 func init() {
+	// Parse JSON objects for ijson
+	json.Unmarshal(smallJSON, &smallJSONParsed)
+	json.Unmarshal(mediumJSON, &mediumJSONParsed)
 	// Generate large JSON with 1000 items
 	largeJSON = []byte(`{"items":[`)
 	for i := 0; i < 1000; i++ {
@@ -52,6 +62,9 @@ func init() {
 		largeJSON = append(largeJSON, []byte(item)...)
 	}
 	largeJSON = append(largeJSON, []byte(`],"metadata":{"count":1000,"generated":"2025-09-01"}}`)...)
+
+	// Parse large JSON for ijson
+	json.Unmarshal(largeJSON, &largeJSONParsed)
 
 	// Common test paths
 	simplePaths = []string{
@@ -90,6 +103,30 @@ func BenchmarkGet_SimpleSmall_GJSON(b *testing.B) {
 	}
 }
 
+func BenchmarkGet_SimpleSmall_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(smallJSON)
+		parsed.Path("name")
+	}
+}
+
+func BenchmarkGet_SimpleSmall_FASTJSON(b *testing.B) {
+	b.ReportAllocs()
+	var p fastjson.Parser
+	for i := 0; i < b.N; i++ {
+		v, _ := p.ParseBytes(smallJSON)
+		v.GetStringBytes("name")
+	}
+}
+
+func BenchmarkGet_SimpleSmall_IJSON(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		ijson.Get(smallJSONParsed, "name")
+	}
+}
+
 // Simple paths with medium JSON
 func BenchmarkGet_SimpleMedium_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -109,6 +146,48 @@ func BenchmarkGet_SimpleMedium_GJSON(b *testing.B) {
 	}
 }
 
+func BenchmarkGet_SimpleMedium_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(mediumJSON)
+		for _, path := range simplePaths {
+			parsed.Path(path)
+		}
+	}
+}
+
+func BenchmarkGet_SimpleMedium_FASTJSON(b *testing.B) {
+	b.ReportAllocs()
+	var p fastjson.Parser
+	for i := 0; i < b.N; i++ {
+		v, _ := p.ParseBytes(mediumJSON)
+		for _, path := range simplePaths {
+			// fastjson requires manual path navigation
+			switch path {
+			case "name":
+				v.GetStringBytes("name")
+			case "age":
+				v.GetInt("age")
+			case "address.city":
+				v.Get("address", "city")
+			case "phones.0.number":
+				v.Get("phones", "0", "number")
+			case "scores.2":
+				v.Get("scores", "2")
+			}
+		}
+	}
+}
+
+func BenchmarkGet_SimpleMedium_IJSON(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, path := range simplePaths {
+			ijson.Get(mediumJSONParsed, path)
+		}
+	}
+}
+
 // Complex paths with medium JSON
 func BenchmarkGet_ComplexMedium_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -123,6 +202,45 @@ func BenchmarkGet_ComplexMedium_GJSON(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		gjson.GetBytes(mediumJSON, "phones[?(@.type==\"work\")].number")
 		gjson.GetBytes(mediumJSON, "scores[2]")
+	}
+}
+
+func BenchmarkGet_ComplexMedium_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(mediumJSON)
+		// GABS doesn't support complex filters directly, use simple path
+		parsed.Path("phones.1.number") // Approximate work phone
+		parsed.Path("scores.2")
+	}
+}
+
+func BenchmarkGet_ComplexMedium_FASTJSON(b *testing.B) {
+	b.ReportAllocs()
+	var p fastjson.Parser
+	for i := 0; i < b.N; i++ {
+		v, _ := p.ParseBytes(mediumJSON)
+		// Manual filter simulation for work phone
+		phones := v.Get("phones")
+		if phones != nil {
+			for j := 0; j < 2; j++ {
+				phone := phones.Get(strconv.Itoa(j))
+				if phone != nil && string(phone.GetStringBytes("type")) == "work" {
+					phone.GetStringBytes("number")
+					break
+				}
+			}
+		}
+		v.Get("scores", "2")
+	}
+}
+
+func BenchmarkGet_ComplexMedium_IJSON(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		// ijson may not support complex filters, use simple path
+		ijson.Get(mediumJSONParsed, "phones.1.number")
+		ijson.Get(mediumJSONParsed, "scores.2")
 	}
 }
 
@@ -174,6 +292,47 @@ func BenchmarkGet_MultiPath_GJSON(b *testing.B) {
 	}
 }
 
+func BenchmarkGet_MultiPath_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(mediumJSON)
+		for _, path := range simplePaths {
+			parsed.Path(path)
+		}
+	}
+}
+
+func BenchmarkGet_MultiPath_FASTJSON(b *testing.B) {
+	b.ReportAllocs()
+	var p fastjson.Parser
+	for i := 0; i < b.N; i++ {
+		v, _ := p.ParseBytes(mediumJSON)
+		for _, path := range simplePaths {
+			switch path {
+			case "name":
+				v.GetStringBytes("name")
+			case "age":
+				v.GetInt("age")
+			case "address.city":
+				v.Get("address", "city")
+			case "phones.0.number":
+				v.Get("phones", "0", "number")
+			case "scores.2":
+				v.Get("scores", "2")
+			}
+		}
+	}
+}
+
+func BenchmarkGet_MultiPath_IJSON(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, path := range simplePaths {
+			ijson.Get(mediumJSONParsed, path)
+		}
+	}
+}
+
 // Complex filter operation
 func BenchmarkGet_Filter_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -186,6 +345,58 @@ func BenchmarkGet_Filter_GJSON(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		gjson.GetBytes(largeJSON, "items[?(@.metadata.priority>3)].name")
+	}
+}
+
+func BenchmarkGet_Filter_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(largeJSON)
+		// GABS doesn't support JSONPath filters, manual iteration
+		items := parsed.S("items").Children()
+		for _, item := range items {
+			if priority, ok := item.Path("metadata.priority").Data().(float64); ok && priority > 3 {
+				item.Path("name")
+			}
+		}
+	}
+}
+
+func BenchmarkGet_Filter_FASTJSON(b *testing.B) {
+	b.ReportAllocs()
+	var p fastjson.Parser
+	for i := 0; i < b.N; i++ {
+		v, _ := p.ParseBytes(largeJSON)
+		items := v.Get("items")
+		if items != nil {
+			// Manual filtering
+			items.GetArray() // This forces parsing the array
+			for j := 0; j < 1000; j++ {
+				item := items.Get(strconv.Itoa(j))
+				if item != nil {
+					priority := item.Get("metadata", "priority")
+					if priority != nil && priority.GetInt() > 3 {
+						item.GetStringBytes("name")
+					}
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkGet_Filter_IJSON(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		// ijson likely doesn't support complex filters, manual approach
+		for j := 0; j < 1000; j++ {
+			priorityPath := fmt.Sprintf("items.%d.metadata.priority", j)
+			namePath := fmt.Sprintf("items.%d.name", j)
+
+			priority, _ := ijson.Get(largeJSONParsed, priorityPath)
+			if p, ok := priority.(float64); ok && p > 3 {
+				ijson.Get(largeJSONParsed, namePath)
+			}
+		}
 	}
 }
 
@@ -223,6 +434,15 @@ func BenchmarkSet_SimpleSmall_SJSON(b *testing.B) {
 	}
 }
 
+func BenchmarkSet_SimpleSmall_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(smallJSON)
+		parsed.Set("Jane", "name")
+		parsed.Bytes()
+	}
+}
+
 // Add a new field to small JSON
 func BenchmarkSet_AddField_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -235,6 +455,15 @@ func BenchmarkSet_AddField_SJSON(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		sjson.SetBytes(smallJSON, "email", "john@example.com")
+	}
+}
+
+func BenchmarkSet_AddField_GABS(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		parsed, _ := gabs.ParseJSON(smallJSON)
+		parsed.Set("john@example.com", "email")
+		parsed.Bytes()
 	}
 }
 
@@ -398,7 +627,7 @@ func BenchmarkRealistic_UpdateProfile_NJSON(b *testing.B) {
 
 		// Add new field
 		if name == "John" && city == "New York" {
-			json, _ = njson.Set(json, "user.profile.lastUpdated", "2025-09-01")
+			_, _ = njson.Set(json, "user.profile.lastUpdated", "2025-09-01")
 		}
 	}
 }
@@ -421,7 +650,7 @@ func BenchmarkRealistic_UpdateProfile_SJSON(b *testing.B) {
 
 		// Add new field
 		if name == "John" && city == "New York" {
-			json, _ = sjson.SetBytes(json, "user.profile.lastUpdated", "2025-09-01")
+			_, _ = sjson.SetBytes(json, "user.profile.lastUpdated", "2025-09-01")
 		}
 	}
 }

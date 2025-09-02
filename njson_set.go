@@ -266,7 +266,25 @@ func Delete(json []byte, path string) ([]byte, error) {
 
 // DeleteWithOptions removes a value with the specified options
 func DeleteWithOptions(json []byte, path string, options *SetOptions) ([]byte, error) {
-	// Use nil as the "deletion marker"
+	if options == nil {
+		options = &DefaultSetOptions
+	}
+
+	// Try ultra-fast delete paths first (compact JSON only to maintain formatting)
+	if !options.MergeObjects && !options.MergeArrays && !isLikelyPretty(json) {
+		// Try fast simple key deletion for compact JSON
+		if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
+			if fast, ok := deleteFastSimpleKey(json, path); ok {
+				return fast, nil
+			}
+		}
+		// Try fast nested deletion
+		if fast, ok, err := deleteFastPath(json, path); err == nil && ok {
+			return fast, nil
+		}
+	}
+
+	// Fallback to SET with nil (deletion marker)
 	return SetWithOptions(json, path, nil, options)
 }
 
@@ -1474,6 +1492,189 @@ func fastDelete(data []byte, path string) ([]byte, bool, error) {
 		return out, true, nil
 	}
 	return nil, false, nil
+}
+
+// deleteFastPath handles nested path deletions with optimized byte manipulation
+func deleteFastPath(data []byte, path string) ([]byte, bool, error) {
+	// For now, handle simple nested paths like "address.city"
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return nil, false, nil
+	}
+
+	// Navigate to parent object
+	current := data
+	currentStart := 0
+
+	for _, part := range parts[:len(parts)-1] {
+		// Skip array indices for now, focus on object navigation
+		if strings.Contains(part, "[") {
+			return nil, false, nil
+		}
+
+		// Find object value for this part
+		start := 0
+		for start < len(current) && current[start] <= ' ' {
+			start++
+		}
+
+		if start >= len(current) || current[start] != '{' {
+			return nil, false, nil
+		}
+
+		valueStart, valueEnd := getObjectValueRange(current, part)
+		if valueStart == -1 {
+			return nil, false, nil // Path doesn't exist
+		}
+
+		currentStart += valueStart
+		current = current[valueStart:valueEnd]
+	}
+
+	// Now delete the final key from the current object
+	finalKey := parts[len(parts)-1]
+	if strings.Contains(finalKey, "[") {
+		return nil, false, nil // Array operations not supported in fast path yet
+	}
+
+	// Call the improved deleteFastSimpleKey with correct signature
+	objToModify := data[currentStart : currentStart+len(current)]
+	result, changed := deleteFastSimpleKey(objToModify, finalKey)
+	if !changed {
+		return nil, false, nil
+	}
+
+	// Rebuild the full document
+	finalResult := make([]byte, 0, len(data))
+	finalResult = append(finalResult, data[:currentStart]...)
+	finalResult = append(finalResult, result...)
+	finalResult = append(finalResult, data[currentStart+len(current):]...)
+
+	return finalResult, true, nil
+}
+
+// deleteFastSimpleKey handles deletion of top-level keys using direct byte manipulation
+func deleteFastSimpleKey(data []byte, key string) (result []byte, changed bool) {
+	// Skip whitespace to find start of object
+	start := 0
+	for start < len(data) && data[start] <= ' ' {
+		start++
+	}
+
+	if start >= len(data) || data[start] != '{' {
+		return data, false // Not an object
+	}
+
+	keyStr := `"` + key + `"`
+	pos := start + 1
+
+	for pos < len(data) {
+		// Skip whitespace
+		for pos < len(data) && data[pos] <= ' ' {
+			pos++
+		}
+
+		if pos >= len(data) || data[pos] == '}' {
+			break // End of object
+		}
+
+		if data[pos] != '"' {
+			return data, false // Invalid JSON
+		}
+
+		// Mark the start of this key-value pair
+		pairStart := pos
+
+		// Find the end of the key
+		keyStart := pos
+		pos++
+		for pos < len(data) && data[pos] != '"' {
+			if data[pos] == '\\' {
+				pos++ // Skip escaped character
+			}
+			pos++
+		}
+
+		if pos >= len(data) {
+			return data, false // Invalid JSON
+		}
+
+		keyEnd := pos + 1 // Include closing quote
+		currentKey := data[keyStart:keyEnd]
+
+		// Skip to colon
+		pos++
+		for pos < len(data) && data[pos] <= ' ' {
+			pos++
+		}
+
+		if pos >= len(data) || data[pos] != ':' {
+			return data, false // Invalid JSON
+		}
+
+		pos++ // Skip colon
+
+		// Skip whitespace after colon
+		for pos < len(data) && data[pos] <= ' ' {
+			pos++
+		}
+
+		// Find end of value
+		valueEnd := findValueEnd(data, pos)
+		if valueEnd == -1 {
+			return data, false // Invalid JSON
+		}
+
+		// Check if this is the key we want to delete
+		if string(currentKey) == keyStr {
+			// Found the key to delete
+			pairEnd := valueEnd
+
+			// Handle comma removal
+			// Look for comma after the value
+			tempPos := valueEnd
+			for tempPos < len(data) && data[tempPos] <= ' ' {
+				tempPos++
+			}
+
+			if tempPos < len(data) && data[tempPos] == ',' {
+				// Include the trailing comma
+				pairEnd = tempPos + 1
+			} else {
+				// No trailing comma, look for preceding comma
+				tempPos = pairStart - 1
+				for tempPos >= start && data[tempPos] <= ' ' {
+					tempPos--
+				}
+
+				if tempPos >= start && data[tempPos] == ',' {
+					// Include the preceding comma
+					pairStart = tempPos
+				}
+			}
+
+			// Build result by removing the key-value pair
+			result = make([]byte, 0, len(data)-(pairEnd-pairStart))
+			result = append(result, data[:pairStart]...)
+			result = append(result, data[pairEnd:]...)
+
+			return result, true
+		}
+
+		// Move to next key-value pair
+		pos = valueEnd
+		for pos < len(data) && data[pos] <= ' ' {
+			pos++
+		}
+
+		if pos < len(data) && data[pos] == ',' {
+			pos++
+		} else if pos < len(data) && data[pos] == '}' {
+			break
+		}
+	}
+
+	return data, false // Key not found
 }
 
 // fastGetObjectValue returns the raw value bytes for a key within an object slice
