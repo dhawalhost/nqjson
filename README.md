@@ -6,6 +6,7 @@
 
 - **[Installation Guide](INSTALL.md)** - Step-by-step installation and usage guide
 - **[API Reference](API.md)** - Complete API documentation with all methods and types
+- **[Path Syntax Guide](SYNTAX.md)** - Comprehensive guide to all supported path expression syntaxes
 - **[Examples](EXAMPLES.md)** - Comprehensive examples for all use cases
 - **[Performance Benchmarks](BENCHMARKS.md)** - Detailed performance comparisons with other libraries
 <!-- - **[Go Doc](https://godoc.org/github.com/dhawalhost/njson)** - Online API documentation -->

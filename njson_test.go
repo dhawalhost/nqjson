@@ -1,9 +1,7 @@
-package njson_test
+package njson
 
 import (
 	"fmt"
-
-	"github.com/dhawalhost/njson"
 )
 
 func ExampleSet_simple() {
@@ -17,21 +15,21 @@ func ExampleSet_simple() {
 	}`)
 
 	// Simple value replacement - uses fast path (no compilation)
-	result, err := njson.Set(json, "age", 31)
+	result, err := Set(json, "age", 31)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
 	// Add a new field
-	result, err = njson.Set(result, "email", "john.doe@example.com")
+	result, err = Set(result, "email", "john.doe@example.com")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
 	// Nested field update
-	result, err = njson.Set(result, "address.city", "Boston")
+	result, err = Set(result, "address.city", "Boston")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -61,7 +59,7 @@ func ExampleSet_array() {
 	}`)
 
 	// Update array element
-	result, err := njson.Set(json, "users.1.name", "Robert")
+	result, err := Set(json, "users.1.name", "Robert")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -72,7 +70,7 @@ func ExampleSet_array() {
 		"id":   3,
 		"name": "Charlie",
 	}
-	result, err = njson.Set(result, "users.2", newUser)
+	result, err = Set(result, "users.2", newUser)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -115,11 +113,11 @@ func ExampleSetWithOptions() {
 		"language": "en-US",
 	}
 
-	options := njson.SetOptions{
+	options := SetOptions{
 		MergeObjects: true,
 	}
 
-	result, err := njson.SetWithOptions(json, "settings", newSettings, &options)
+	result, err := SetWithOptions(json, "settings", newSettings, &options)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -127,7 +125,7 @@ func ExampleSetWithOptions() {
 
 	// Merge arrays
 	options.MergeArrays = true
-	result, err = njson.SetWithOptions(result, "data", []interface{}{4, 5}, &options)
+	result, err = SetWithOptions(result, "data", []interface{}{4, 5}, &options)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -158,14 +156,14 @@ func ExampleCompileSetPath() {
 	json := []byte(`{"users":[{"name":"Alice","role":"admin"},{"name":"Bob","role":"user"}]}`)
 
 	// For repeated operations, compile the path once
-	path, err := njson.CompileSetPath("users.0.role")
+	path, err := CompileSetPath("users.0.role")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
 	// Use the compiled path multiple times
-	result, err := njson.SetWithCompiledPath(json, path, "super-admin", nil)
+	result, err := SetWithCompiledPath(json, path, "super-admin", nil)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -178,12 +176,12 @@ func ExampleCompileSetPath() {
 	// Add each user (in real code, this would be in a loop)
 	for i, name := range userNames[:1] { // Just use first user for example
 		// Compile path once
-		userPath, _ := njson.CompileSetPath(fmt.Sprintf("users.%d.name", i))
-		rolePath, _ := njson.CompileSetPath(fmt.Sprintf("users.%d.role", i))
+		userPath, _ := CompileSetPath(fmt.Sprintf("users.%d.name", i))
+		rolePath, _ := CompileSetPath(fmt.Sprintf("users.%d.role", i))
 
 		// Use compiled path for repeated operations
-		result, _ = njson.SetWithCompiledPath(result, userPath, name, nil)
-		result, _ = njson.SetWithCompiledPath(result, rolePath, userRoles[i], nil)
+		result, _ = SetWithCompiledPath(result, userPath, name, nil)
+		result, _ = SetWithCompiledPath(result, rolePath, userRoles[i], nil)
 	}
 
 	// Display the updated JSON
@@ -218,14 +216,14 @@ func ExampleDelete() {
 	}`)
 
 	// Delete a nested field
-	result, err := njson.Delete(json, "user.settings.notifications")
+	result, err := Delete(json, "user.settings.notifications")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
 	// Delete an entire object
-	result, err = njson.Delete(result, "user.settings")
+	result, err = Delete(result, "user.settings")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
