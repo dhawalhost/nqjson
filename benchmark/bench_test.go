@@ -2,14 +2,12 @@ package njson_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"strconv"
 	"testing"
 
 	"github.com/Jeffail/gabs/v2"
-	"github.com/akshaybharambe14/ijson"
 	"github.com/dhawalhost/njson"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -17,7 +15,6 @@ import (
 )
 
 var smallJSON = []byte(`{"name":"John","age":30,"city":"New York"}`)
-var smallJSONParsed interface{}
 
 var mediumJSON = []byte(`{
   "name": "John Smith",
@@ -36,17 +33,12 @@ var mediumJSON = []byte(`{
   "active": true,
   "scores": [95, 87, 92, 78, 85]
 }`)
-var mediumJSONParsed interface{}
 
 var largeJSON []byte
-var largeJSONParsed interface{}
 var complexPaths []string
 var simplePaths []string
 
 func init() {
-	// Parse JSON objects for ijson
-	json.Unmarshal(smallJSON, &smallJSONParsed)
-	json.Unmarshal(mediumJSON, &mediumJSONParsed)
 	// Generate large JSON with 1000 items
 	largeJSON = []byte(`{"items":[`)
 	for i := 0; i < 1000; i++ {
@@ -62,9 +54,6 @@ func init() {
 		largeJSON = append(largeJSON, []byte(item)...)
 	}
 	largeJSON = append(largeJSON, []byte(`],"metadata":{"count":1000,"generated":"2025-09-01"}}`)...)
-
-	// Parse large JSON for ijson
-	json.Unmarshal(largeJSON, &largeJSONParsed)
 
 	// Common test paths
 	simplePaths = []string{
@@ -120,13 +109,6 @@ func BenchmarkGet_SimpleSmall_FASTJSON(b *testing.B) {
 	}
 }
 
-func BenchmarkGet_SimpleSmall_IJSON(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		ijson.Get(smallJSONParsed, "name")
-	}
-}
-
 // Simple paths with medium JSON
 func BenchmarkGet_SimpleMedium_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -179,15 +161,6 @@ func BenchmarkGet_SimpleMedium_FASTJSON(b *testing.B) {
 	}
 }
 
-func BenchmarkGet_SimpleMedium_IJSON(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		for _, path := range simplePaths {
-			ijson.Get(mediumJSONParsed, path)
-		}
-	}
-}
-
 // Complex paths with medium JSON
 func BenchmarkGet_ComplexMedium_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -232,15 +205,6 @@ func BenchmarkGet_ComplexMedium_FASTJSON(b *testing.B) {
 			}
 		}
 		v.Get("scores", "2")
-	}
-}
-
-func BenchmarkGet_ComplexMedium_IJSON(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		// ijson may not support complex filters, use simple path
-		ijson.Get(mediumJSONParsed, "phones.1.number")
-		ijson.Get(mediumJSONParsed, "scores.2")
 	}
 }
 
@@ -324,15 +288,6 @@ func BenchmarkGet_MultiPath_FASTJSON(b *testing.B) {
 	}
 }
 
-func BenchmarkGet_MultiPath_IJSON(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		for _, path := range simplePaths {
-			ijson.Get(mediumJSONParsed, path)
-		}
-	}
-}
-
 // Complex filter operation
 func BenchmarkGet_Filter_NJSON(b *testing.B) {
 	b.ReportAllocs()
@@ -379,22 +334,6 @@ func BenchmarkGet_Filter_FASTJSON(b *testing.B) {
 						item.GetStringBytes("name")
 					}
 				}
-			}
-		}
-	}
-}
-
-func BenchmarkGet_Filter_IJSON(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		// ijson likely doesn't support complex filters, manual approach
-		for j := 0; j < 1000; j++ {
-			priorityPath := fmt.Sprintf("items.%d.metadata.priority", j)
-			namePath := fmt.Sprintf("items.%d.name", j)
-
-			priority, _ := ijson.Get(largeJSONParsed, priorityPath)
-			if p, ok := priority.(float64); ok && p > 3 {
-				ijson.Get(largeJSONParsed, namePath)
 			}
 		}
 	}
