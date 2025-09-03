@@ -132,7 +132,10 @@ func Set(json []byte, path string, value interface{}) ([]byte, error) {
 	// Ultra-fast path: avoid unmarshaling for simple operations
 	if len(json) > 0 && len(path) > 0 {
 		// Try direct byte manipulation first
-		if result, ok, err := ultraFastDirectSet(json, path, value); err == nil && ok {
+		if result, ok, err := ultraFastDirectSet(json, path, value); err != nil {
+			// If it's a validation error, return it immediately
+			return nil, err
+		} else if ok {
 			return result, nil
 		}
 	}
@@ -142,6 +145,30 @@ func Set(json []byte, path string, value interface{}) ([]byte, error) {
 
 // ultraFastDirectSet attempts to set values using direct byte manipulation
 func ultraFastDirectSet(json []byte, path string, value interface{}) ([]byte, bool, error) {
+	// Basic JSON validation - must start with { or [ and end properly
+	if len(json) < 2 {
+		return nil, false, errors.New("invalid JSON format")
+	}
+	
+	if json[0] == '{' && json[len(json)-1] != '}' {
+		return nil, false, errors.New("invalid JSON format")
+	}
+	
+	if json[0] == '[' && json[len(json)-1] != ']' {
+		return nil, false, errors.New("invalid JSON format")
+	}
+	
+	if json[0] != '{' && json[0] != '[' {
+		return nil, false, errors.New("invalid JSON format")
+	}
+
+	// Quick validation - check for unquoted values (common JSON error)
+	// Look for patterns like ": json}" which would be invalid
+	jsonStr := string(json)
+	if strings.Contains(jsonStr, ": json}") || strings.Contains(jsonStr, ": undefined}") {
+		return nil, false, errors.New("invalid JSON syntax")
+	}
+
 	// Don't use for deletion marker
 	if value == deletionMarkerValue {
 		return nil, false, nil
@@ -149,6 +176,11 @@ func ultraFastDirectSet(json []byte, path string, value interface{}) ([]byte, bo
 
 	// Only handle simple paths without complex syntax
 	if strings.Contains(path, "[") || strings.Contains(path, "?") || strings.Contains(path, "*") {
+		return nil, false, nil
+	}
+	
+	// Only handle object operations for now (arrays are more complex)
+	if json[0] != '{' {
 		return nil, false, nil
 	}
 
@@ -251,7 +283,7 @@ func ultraFastDotPathSet(json []byte, path string, encodedValue []byte) ([]byte,
 
 	// Navigate to the target location
 	data := json
-	offsets := make([]int, 0, len(parts))
+	absoluteOffset := 0
 	
 	for _, part := range parts[:len(parts)-1] {
 		start, end := getObjectValueRange(data, part)
@@ -259,12 +291,8 @@ func ultraFastDotPathSet(json []byte, path string, encodedValue []byte) ([]byte,
 			return nil, false, nil // Path doesn't exist
 		}
 		
-		// Accumulate offsets
-		totalOffset := 0
-		for _, offset := range offsets {
-			totalOffset += offset
-		}
-		offsets = append(offsets, totalOffset+start)
+		// Update absolute offset
+		absoluteOffset += start
 		
 		data = data[start:end]
 	}
@@ -278,14 +306,8 @@ func ultraFastDotPathSet(json []byte, path string, encodedValue []byte) ([]byte,
 	}
 
 	// Calculate absolute position
-	absoluteValueStart := valueStart
-	for _, offset := range offsets {
-		absoluteValueStart += offset
-	}
-	absoluteValueEnd := valueEnd
-	for _, offset := range offsets {
-		absoluteValueEnd += offset
-	}
+	absoluteValueStart := absoluteOffset + valueStart
+	absoluteValueEnd := absoluteOffset + valueEnd
 
 	// Build result
 	resultSize := len(json) - (absoluteValueEnd - absoluteValueStart) + len(encodedValue)
