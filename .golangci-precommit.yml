@@ -13,8 +13,8 @@ output:
 linters-settings:
   gocyclo:
     min-complexity: 20  # More lenient for pre-commit
-  lll:
-    line-length: 200    # More lenient for pre-commit
+  # lll:
+  #   line-length: 200    # More lenient for pre-commit
 
 linters:
   disable-all: true

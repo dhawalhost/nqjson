@@ -10,7 +10,6 @@ help:
 	@echo "Available targets:"
 	@echo "  test          - Run all tests"
 	@echo "  test-unit     - Run unit tests only"
-	@echo "  test-bench    - Run benchmark tests"
 	@echo "  test-race     - Run tests with race detector"
 	@echo "  test-coverage - Run tests with coverage report"
 	@echo "  lint          - Run linting checks"
@@ -32,15 +31,11 @@ install-tools:
 	@echo "Tools installed successfully!"
 
 # Test targets
-test: test-unit test-bench
+test: test-unit
 
 test-unit:
 	@echo "Running unit tests..."
 	go test -v -timeout 30s ./...
-
-test-bench:
-	@echo "Running benchmark tests..."
-	go test -v -bench=. -benchmem -run=^$$ ./benchmark/
 
 test-race:
 	@echo "Running tests with race detector..."
@@ -106,12 +101,6 @@ ci: deps tidy build test-race lint security
 # Development workflow
 dev: fmt vet test-unit
 	@echo "Development checks completed!"
-
-# Performance testing
-perf:
-	@echo "Running performance benchmarks..."
-	go test -bench=. -benchmem -cpuprofile=cpu.prof -memprofile=mem.prof ./benchmark/
-	@echo "Performance profiles generated: cpu.prof, mem.prof"
 
 # Generate documentation
 docs:

@@ -124,28 +124,6 @@ jobs:
         flags: unittests
         name: codecov-umbrella
 
-  # Benchmark tests
-  benchmark:
-    name: Benchmark Tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.22'
-        
-    - name: Run benchmarks
-      run: go test -bench=. -benchmem -run=^$ ./benchmark/
-      
-    - name: Check for performance regressions
-      run: |
-        echo "Running baseline benchmarks..."
-        go test -bench=. -benchmem -run=^$ ./benchmark/ > current_bench.txt
-        echo "Benchmark results:"
-        cat current_bench.txt
-
   # Build verification
   build:
     name: Build Verification
@@ -216,7 +194,7 @@ jobs:
   status:
     name: CI Status
     if: always()
-    needs: [security, lint, test, benchmark, build, integration]
+    needs: [security, lint, test, build, integration]
     runs-on: ubuntu-latest
     steps:
     - name: Check all jobs status

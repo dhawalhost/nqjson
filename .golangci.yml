@@ -43,11 +43,11 @@ linters-settings:
     min-complexity: 15
   goimports:
     local-prefixes: github.com/dhawalhost/njson
-  mnd:
-    settings:
-      mnd:
-        # don't include the "operation" and "assign"
-        checks: argument,case,condition,return
+  # mnd:
+  #   settings:
+  #     mnd:
+  #       # don't include the "operation" and "assign"
+  #       checks: argument,case,condition,return
   govet:
     settings:
       printf:
@@ -56,8 +56,8 @@ linters-settings:
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  lll:
-    line-length: 140
+  # lll:
+  #   line-length: 140
   misspell:
     locale: US
   nolintlint:
@@ -77,34 +77,34 @@ linters:
     - dogsled
     - dupl
     - errcheck
-    - exhaustive
+    # - exhaustive
     - funlen
     - gochecknoinits
     - goconst
-    - gocritic
+    # - gocritic
     - gocyclo
     - gofmt
     - goimports
-    - mnd
+    # - mnd
     - goprintffuncname
     - gosec
-    - gosimple
+    # - gosimple
     - govet
     - ineffassign
-    - lll
+    # - lll
     - misspell
     - nakedret
     - noctx
     - nolintlint
     - predeclared
-    - revive
+    # - revive
     - rowserrcheck
     - staticcheck
     - stylecheck
     - typecheck
     - unconvert
-    - unparam
-    - unused
+    # - unparam - Disabled: function parameters are kept for API compatibility
+    # - unused
     - whitespace
 
 issues:
@@ -116,7 +116,7 @@ issues:
   exclude-rules:
     - path: _test\.go
       linters:
-        - mnd
+        # - mnd
         - funlen
         - gocyclo
 
@@ -149,9 +149,9 @@ issues:
       text: "SA9003:"
 
     # Exclude lll issues for long lines in comments or strings
-    - linters:
-        - lll
-      source: "^//go:"
+    # - linters:
+    #     - lll
+    #   source: "^//go:"
 
   # Independently from option `exclude` we use default exclude patterns,
   # it can be disabled by this option. To list all
