@@ -929,27 +929,33 @@ func shouldAddSpace(dst []byte, src []byte, i int) bool {
 		return false
 	}
 
-	lastChar := dst[len(dst)-1]
-	if lastChar == ',' || lastChar == ':' || lastChar == '{' || lastChar == '[' {
+	// Check the last character in destination
+	if isStructuralChar(dst[len(dst)-1]) {
 		return false
 	}
 
 	// Look ahead to see if we need a space
-	if i+1 < len(src) {
-		nextChar := src[i+1]
-		if nextChar <= ' ' || nextChar == ',' || nextChar == '}' || nextChar == ']' || nextChar == ':' {
-			return false
-		}
-
-		// Check if previous char is alphanumeric
-		if (lastChar >= 'a' && lastChar <= 'z') ||
-			(lastChar >= 'A' && lastChar <= 'Z') ||
-			(lastChar >= '0' && lastChar <= '9') {
-			// Be aggressive about compacting - skip space
-			return false
-		}
+	if i+1 < len(src) && !isSpaceNeededBeforeNextChar(src[i+1]) {
+		return false
 	}
 
+	// Default to false for aggressive compacting
+	return false
+}
+
+// isStructuralChar checks if a character is a JSON structural character
+func isStructuralChar(c byte) bool {
+	return c == ',' || c == ':' || c == '{' || c == '['
+}
+
+// isSpaceNeededBeforeNextChar checks if a space is needed before the next character
+func isSpaceNeededBeforeNextChar(nextChar byte) bool {
+	// If next character is whitespace or structural, no space needed
+	if nextChar <= ' ' || nextChar == ',' || nextChar == '}' || nextChar == ']' || nextChar == ':' {
+		return false
+	}
+
+	// Always compact - no space needed in our implementation
 	return false
 }
 

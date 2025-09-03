@@ -2107,54 +2107,72 @@ func simpleCommaCountAccess(data []byte, targetIndex int) (int, int) {
 
 // fastCommaCountingAccess uses ultra-fast comma counting for large array indices
 // processCommaCountingChar processes a character during comma counting
+// It delegates to either processNonStringChar or processStringCharInGet based on whether we're in a string
 func processCommaCountingChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
 	if !*inString {
-		switch c {
-		case '"':
-			*inString = true
-		case '[', '{':
-			*depth++
-		case ']', '}':
-			if *depth == 0 && c == ']' {
-				// End of array, didn't find target
-				return -1, -1, true
-			}
-			*depth--
-		case ',':
-			if *depth == 0 {
-				*commaCount++
-				if *commaCount == targetIndex {
-					// Found the comma before our target element, now find element start
-					*i++
-					// Skip whitespace after comma
-					for *i < len(data) && data[*i] <= ' ' {
-						*i++
-					}
-					if *i >= len(data) || data[*i] == ']' {
-						return -1, -1, true
-					}
-					// Found element start, now find end
-					start := *i
-					end := fastSkipValue(data, *i)
-					if end == -1 {
-						return -1, -1, true
-					}
-					return start, end, true
-				}
-			}
+		// Not in string - handle brackets, commas, etc.
+		return processNonStringChar(c, inString, depth, commaCount, targetIndex, i, data)
+	}
+
+	// In string - handle string characters including escapes
+	return processStringCharInGet(c, inString, i, data)
+}
+
+// processNonStringChar handles characters outside of string literals
+// It tracks depth, commas, and string boundaries during JSON parsing
+func processNonStringChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
+	switch c {
+	case '"':
+		// Start of a string
+		*inString = true
+	case '[', '{':
+		// Enter a new array or object
+		*depth++
+	case ']', '}':
+		// Check if we're at the top level array closing bracket
+		if *depth == 0 && c == ']' {
+			// End of array, didn't find target
+			return -1, -1, true
 		}
-	} else {
-		// In string
-		if c == '"' {
-			*inString = false
-		} else if c == '\\' {
-			*i++ // Skip next character
-			if *i >= len(data) {
-				return -1, -1, true
+		// Exit an array or object
+		*depth--
+	case ',':
+		// Only count commas at the top level (depth == 0)
+		if *depth == 0 {
+			*commaCount++
+			// If we found the target comma, find the element
+			if *commaCount == targetIndex {
+				return findCountTargetElement(i, data)
 			}
 		}
 	}
+	// Continue parsing
 	return -1, -1, false
+}
+
+// processStringCharInGet handles characters inside string literals
+// It tracks string boundaries and handles escape sequences
+func processStringCharInGet(c byte, inString *bool, i *int, data []byte) (int, int, bool) {
+	switch c {
+	case '"':
+		// End of string
+		*inString = false
+	case '\\':
+		// Skip escaped character (like \" or \\)
+		*i++ // Move past the escaped character
+		// Check for end of data to avoid index out of range
+		if *i >= len(data) {
+			return -1, -1, true
+		}
+	}
+	// Continue parsing
+	return -1, -1, false
+}
+
+// Deprecated: use findCountTargetElement instead
+// Kept for reference but will be removed
+func findTargetElement(i *int, data []byte) (int, int, bool) {
+	return findCountTargetElement(i, data)
 }
 
 // handleFirstElementCase handles the special case when looking for index 0
@@ -2226,48 +2244,64 @@ func handleFirstElementForCommaCount(data []byte) (int, int) {
 // processFastCountChar processes a character during fast comma counting
 func processFastCountChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
 	if !*inString {
-		if c == '"' {
-			*inString = true
-		} else if c == '[' || c == '{' {
-			*depth++
-		} else if c == ']' || c == '}' {
-			if *depth == 0 && c == ']' {
-				// End of array without finding target
-				return -1, -1, true
-			}
-			*depth--
-		} else if c == ',' && *depth == 0 {
-			*commaCount++
-			if *commaCount == targetIndex {
-				// Found the comma before our target element
-				*i++
-				// Skip whitespace
-				for *i < len(data) && data[*i] <= ' ' {
-					*i++
-				}
-				if *i >= len(data) || data[*i] == ']' {
-					return -1, -1, true
-				}
-				// Find end of this element
-				start := *i
-				end := fastSkipValue(data, *i)
-				if end == -1 {
-					return -1, -1, true
-				}
-				return start, end, true
-			}
-		}
+		return processCountNonStringChar(c, inString, depth, commaCount, targetIndex, i, data)
 	} else {
-		if c == '"' {
-			*inString = false
-		} else if c == '\\' {
-			*i++ // Skip next character
-			if *i >= len(data) {
-				return -1, -1, true
-			}
+		return processCountStringChar(c, inString, i, data)
+	}
+}
+
+// processCountNonStringChar handles characters outside of string context during counting
+func processCountNonStringChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
+	if c == '"' {
+		*inString = true
+	} else if c == '[' || c == '{' {
+		*depth++
+	} else if c == ']' || c == '}' {
+		if *depth == 0 && c == ']' {
+			// End of array without finding target
+			return -1, -1, true
+		}
+		*depth--
+	} else if c == ',' && *depth == 0 {
+		*commaCount++
+		if *commaCount == targetIndex {
+			return findCountTargetElement(i, data)
 		}
 	}
 	return -1, -1, false
+}
+
+// processCountStringChar handles characters inside string context during counting
+func processCountStringChar(c byte, inString *bool, i *int, data []byte) (int, int, bool) {
+	if c == '"' {
+		*inString = false
+	} else if c == '\\' {
+		*i++ // Skip next character
+		if *i >= len(data) {
+			return -1, -1, true
+		}
+	}
+	return -1, -1, false
+}
+
+// findCountTargetElement locates the target element after finding the right comma
+func findCountTargetElement(i *int, data []byte) (int, int, bool) {
+	// Found the comma before our target element
+	*i++
+	// Skip whitespace
+	for *i < len(data) && data[*i] <= ' ' {
+		*i++
+	}
+	if *i >= len(data) || data[*i] == ']' {
+		return -1, -1, true
+	}
+	// Find end of this element
+	start := *i
+	end := fastSkipValue(data, *i)
+	if end == -1 {
+		return -1, -1, true
+	}
+	return start, end, true
 }
 
 func fastCountCommas(data []byte, targetIndex int) (int, int) {
