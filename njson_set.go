@@ -129,11 +129,172 @@ var (
 // Set sets a value at the specified path in the JSON document.
 // This is the main entry point for most use cases.
 func Set(json []byte, path string, value interface{}) ([]byte, error) {
-	var data interface{}
-	if err := JSON.Unmarshal(json, &data); err != nil {
-		return json, ErrInvalidJSON
+	// Ultra-fast path: avoid unmarshaling for simple operations
+	if len(json) > 0 && len(path) > 0 {
+		// Try direct byte manipulation first
+		if result, ok, err := ultraFastDirectSet(json, path, value); err == nil && ok {
+			return result, nil
+		}
 	}
+	
 	return SetWithOptions(json, path, value, nil)
+}
+
+// ultraFastDirectSet attempts to set values using direct byte manipulation
+func ultraFastDirectSet(json []byte, path string, value interface{}) ([]byte, bool, error) {
+	// Don't use for deletion marker
+	if value == deletionMarkerValue {
+		return nil, false, nil
+	}
+
+	// Only handle simple paths without complex syntax
+	if strings.Contains(path, "[") || strings.Contains(path, "?") || strings.Contains(path, "*") {
+		return nil, false, nil
+	}
+
+	// Encode value first
+	encodedValue, err := fastEncodeJSONValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Handle single key (most common case)
+	if !strings.Contains(path, ".") {
+		return ultraFastSingleKeySet(json, path, encodedValue)
+	}
+
+	// Handle simple dot notation (2-3 levels max)
+	dotCount := strings.Count(path, ".")
+	if dotCount <= 2 {
+		return ultraFastDotPathSet(json, path, encodedValue)
+	}
+
+	return nil, false, nil
+}
+
+// ultraFastSingleKeySet handles single key updates with minimal allocations
+func ultraFastSingleKeySet(json []byte, key string, encodedValue []byte) ([]byte, bool, error) {
+	// Find the key in the root object
+	keyStart, valueStart, valueEnd := findKeyValueRange(json, key)
+	
+	if keyStart >= 0 {
+		// Key exists - replace value
+		resultSize := len(json) - (valueEnd - valueStart) + len(encodedValue)
+		result := make([]byte, 0, resultSize)
+		result = append(result, json[:valueStart]...)
+		result = append(result, encodedValue...)
+		result = append(result, json[valueEnd:]...)
+		return result, true, nil
+	}
+
+	// Key doesn't exist - add it
+	return ultraFastAddKey(json, key, encodedValue)
+}
+
+// ultraFastAddKey adds a new key to a JSON object
+func ultraFastAddKey(json []byte, key string, encodedValue []byte) ([]byte, bool, error) {
+	// Find the closing brace of the root object
+	start := 0
+	for start < len(json) && json[start] != '{' {
+		start++
+	}
+	if start >= len(json) {
+		return nil, false, nil
+	}
+
+	// Find matching closing brace
+	end := len(json) - 1
+	for end > start && json[end] != '}' {
+		end--
+	}
+	if end <= start {
+		return nil, false, nil
+	}
+
+	// Check if object is empty
+	isEmpty := true
+	for i := start + 1; i < end; i++ {
+		if json[i] > ' ' {
+			isEmpty = false
+			break
+		}
+	}
+
+	// Build the new key-value pair
+	keyValueSize := len(key) + len(encodedValue) + 3 // "key":value
+	if !isEmpty {
+		keyValueSize++ // comma
+	}
+
+	result := make([]byte, 0, len(json)+keyValueSize)
+	result = append(result, json[:end]...)
+	
+	if !isEmpty {
+		result = append(result, ',')
+	}
+	
+	result = append(result, '"')
+	result = append(result, key...)
+	result = append(result, '"', ':')
+	result = append(result, encodedValue...)
+	result = append(result, json[end:]...)
+	
+	return result, true, nil
+}
+
+// ultraFastDotPathSet handles simple dot notation paths
+func ultraFastDotPathSet(json []byte, path string, encodedValue []byte) ([]byte, bool, error) {
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return nil, false, nil
+	}
+
+	// Navigate to the target location
+	data := json
+	offsets := make([]int, 0, len(parts))
+	
+	for _, part := range parts[:len(parts)-1] {
+		start, end := getObjectValueRange(data, part)
+		if start < 0 {
+			return nil, false, nil // Path doesn't exist
+		}
+		
+		// Accumulate offsets
+		totalOffset := 0
+		for _, offset := range offsets {
+			totalOffset += offset
+		}
+		offsets = append(offsets, totalOffset+start)
+		
+		data = data[start:end]
+	}
+
+	// Find and replace the final key
+	finalKey := parts[len(parts)-1]
+	keyStart, valueStart, valueEnd := findKeyValueRange(data, finalKey)
+	
+	if keyStart < 0 {
+		return nil, false, nil // Final key doesn't exist
+	}
+
+	// Calculate absolute position
+	absoluteValueStart := valueStart
+	for _, offset := range offsets {
+		absoluteValueStart += offset
+	}
+	absoluteValueEnd := valueEnd
+	for _, offset := range offsets {
+		absoluteValueEnd += offset
+	}
+
+	// Build result
+	resultSize := len(json) - (absoluteValueEnd - absoluteValueStart) + len(encodedValue)
+	result := make([]byte, 0, resultSize)
+	result = append(result, json[:absoluteValueStart]...)
+	result = append(result, encodedValue...)
+	result = append(result, json[absoluteValueEnd:]...)
+	
+	return result, true, nil
 }
 
 // SetWithOptions sets a value with the specified options
@@ -149,43 +310,60 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 		return json, ErrInvalidPath
 	}
 
-	// Fast path: byte-level replacement/insert for simple paths (no full unmarshal)
-	if isSimpleSetPath(path) && !opts.ReplaceInPlace {
-		// Note: nil values are treated as JSON null, not deletion
-		if !opts.MergeObjects && !opts.MergeArrays {
-			// Ultra-fast path for simple single-key operations
-			if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
-				// Try fast replace first (existing key) - safe for any JSON format since it's in-place
-				if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
-					return fast, nil
-				}
-				// Try fast add if replace failed (new key) - compact JSON only to maintain formatting
-				if !isLikelyPretty(json) {
-					if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
-						return fast, nil
-					}
-				}
-			}
-			// Replacement of existing value
-			if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
+	// Ultra-fast path optimization: prioritize byte-level operations for maximum performance
+	if isSimpleSetPath(path) && !opts.ReplaceInPlace && !opts.MergeObjects && !opts.MergeArrays {
+		// Try ultra-fast single key operations first (highest priority)
+		if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
+			// Ultra-fast replace for existing keys (works on any JSON format)
+			if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
 				return fast, nil
 			}
-			// Insert new key or append/extend array (compact JSON only to maintain formatting)
+			// Ultra-fast add for new keys (compact JSON only)
 			if !isLikelyPretty(json) {
-				if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
+				if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
 					return fast, nil
 				}
 			}
-			// Deep create nested objects quickly for dot-only object paths (allow for pretty JSON)
-			if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
+		}
+
+		// Fast path for simple dot notation (higher priority than generic replace)
+		if strings.Count(path, ".") <= 3 && !strings.Contains(path, "[") {
+			if fast, ok, err := setFastSimpleDotPath(json, path, value); err == nil && ok {
 				return fast, nil
 			}
 		}
-		// Fallback to generic simple setter which handles creation/merge/deletion with pretty output
-		return setSimplePath(json, path, value, opts)
+
+		// Fast path for array element updates (higher priority)
+		if strings.Contains(path, ".") && (strings.Contains(path, "0") || strings.Contains(path, "1") || strings.Contains(path, "2")) {
+			if fast, ok, err := setFastArrayElement(json, path, value); err == nil && ok {
+				return fast, nil
+			}
+		}
+
+		// Generic fast replace (existing values)
+		if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
+			return fast, nil
+		}
+
+		// Fast insert/append (new values) - compact JSON only
+		if !isLikelyPretty(json) {
+			if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
+				return fast, nil
+			}
+		}
+
+		// Deep create nested objects quickly
+		if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
+			return fast, nil
+		}
 	}
 
-	// Use compiled path for complex paths or when optimizations are requested
+	// For complex paths or when fast paths fail, use optimized simple path handler
+	if isSimpleSetPath(path) {
+		return setOptimizedSimplePath(json, path, value, opts)
+	}
+
+	// Use compiled path for complex paths
 	compiledPath, err := CompileSetPath(path)
 	if err != nil {
 		return json, err
@@ -2773,6 +2951,137 @@ func isMap(v interface{}) bool {
 func isSlice(v interface{}) bool {
 	_, ok := v.([]interface{})
 	return ok
+}
+
+// setFastSimpleDotPath optimizes simple dot notation paths like "user.name" or "data.items.0"
+func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, bool, error) {
+	// Don't use fast path for deletion marker
+	if value == deletionMarkerValue {
+		return nil, false, nil
+	}
+
+	if len(data) == 0 || !strings.Contains(path, ".") {
+		return nil, false, nil
+	}
+
+	// Only handle simple paths with 1-3 dots
+	dotCount := strings.Count(path, ".")
+	if dotCount > 3 {
+		return nil, false, nil
+	}
+
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 || len(parts) > 4 {
+		return nil, false, nil
+	}
+
+	// Encode the value
+	encodedValue, err := fastEncodeJSONValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Navigate to the target location
+	window := data
+	baseOffset := 0
+	
+	for _, part := range parts[:len(parts)-1] {
+		var start, end int
+		if isAllDigits(part) {
+			// Array access
+			idx, _ := strconv.Atoi(part)
+			start, end = getArrayElementRange(window, idx)
+		} else {
+			// Object access
+			start, end = getObjectValueRange(window, part)
+		}
+		
+		if start < 0 {
+			return nil, false, nil // Path doesn't exist
+		}
+		
+		baseOffset += start
+		window = window[start:end]
+	}
+
+	// Now set the final key
+	finalKey := parts[len(parts)-1]
+	var keyStart, valueStart, valueEnd int
+	
+	if isAllDigits(finalKey) {
+		// Array element replacement
+		idx, _ := strconv.Atoi(finalKey)
+		valueStart, valueEnd = getArrayElementRange(window, idx)
+		if valueStart < 0 {
+			return nil, false, nil
+		}
+		keyStart = valueStart
+	} else {
+		// Object key replacement
+		keyStart, valueStart, valueEnd = findKeyValueRange(window, finalKey)
+		if keyStart < 0 {
+			return nil, false, nil
+		}
+	}
+
+	// Build result with single allocation
+	totalOffset := baseOffset + valueStart
+	resultSize := len(data) - (valueEnd - valueStart) + len(encodedValue)
+	result := make([]byte, 0, resultSize)
+	
+	result = append(result, data[:totalOffset]...)
+	result = append(result, encodedValue...)
+	result = append(result, data[baseOffset+valueEnd:]...)
+	
+	return result, true, nil
+}
+
+// setFastArrayElement optimizes array element updates for common patterns
+func setFastArrayElement(data []byte, path string, value interface{}) ([]byte, bool, error) {
+	// Don't use fast path for deletion marker
+	if value == deletionMarkerValue {
+		return nil, false, nil
+	}
+
+	// Handle patterns like "items.0", "tags.1", "phones.0.number"
+	if !strings.Contains(path, ".") {
+		return nil, false, nil
+	}
+
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return nil, false, nil
+	}
+
+	// Look for array indices in the path
+	hasArrayIndex := false
+	for _, part := range parts {
+		if isAllDigits(part) && len(part) == 1 && part[0] >= '0' && part[0] <= '9' {
+			hasArrayIndex = true
+			break
+		}
+	}
+
+	if !hasArrayIndex {
+		return nil, false, nil
+	}
+
+	// Use the fast simple dot path handler
+	return setFastSimpleDotPath(data, path, value)
+}
+
+// setOptimizedSimplePath provides an optimized version of setSimplePath with minimal allocations
+func setOptimizedSimplePath(json []byte, path string, value interface{}, options SetOptions) ([]byte, error) {
+	// For simple paths, try to avoid full JSON unmarshaling
+	if strings.Count(path, ".") <= 2 && !strings.Contains(path, "[") {
+		// Try fast path first
+		if result, ok, err := setFastSimpleDotPath(json, path, value); err == nil && ok {
+			return result, nil
+		}
+	}
+
+	// Fallback to the original setSimplePath but with optimizations
+	return setSimplePath(json, path, value, options)
 }
 
 // mergeObjects combines two objects, with values from the second overriding the first
