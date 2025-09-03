@@ -139,7 +139,7 @@ func Set(json []byte, path string, value interface{}) ([]byte, error) {
 			return result, nil
 		}
 	}
-	
+
 	return SetWithOptions(json, path, value, nil)
 }
 
@@ -149,15 +149,15 @@ func ultraFastDirectSet(json []byte, path string, value interface{}) ([]byte, bo
 	if len(json) < 2 {
 		return nil, false, errors.New("invalid JSON format")
 	}
-	
+
 	if json[0] == '{' && json[len(json)-1] != '}' {
 		return nil, false, errors.New("invalid JSON format")
 	}
-	
+
 	if json[0] == '[' && json[len(json)-1] != ']' {
 		return nil, false, errors.New("invalid JSON format")
 	}
-	
+
 	if json[0] != '{' && json[0] != '[' {
 		return nil, false, errors.New("invalid JSON format")
 	}
@@ -178,7 +178,7 @@ func ultraFastDirectSet(json []byte, path string, value interface{}) ([]byte, bo
 	if strings.Contains(path, "[") || strings.Contains(path, "?") || strings.Contains(path, "*") {
 		return nil, false, nil
 	}
-	
+
 	// Only handle object operations for now (arrays are more complex)
 	if json[0] != '{' {
 		return nil, false, nil
@@ -208,7 +208,7 @@ func ultraFastDirectSet(json []byte, path string, value interface{}) ([]byte, bo
 func ultraFastSingleKeySet(json []byte, key string, encodedValue []byte) ([]byte, bool, error) {
 	// Find the key in the root object
 	keyStart, valueStart, valueEnd := findKeyValueRange(json, key)
-	
+
 	if keyStart >= 0 {
 		// Key exists - replace value
 		resultSize := len(json) - (valueEnd - valueStart) + len(encodedValue)
@@ -260,17 +260,17 @@ func ultraFastAddKey(json []byte, key string, encodedValue []byte) ([]byte, bool
 
 	result := make([]byte, 0, len(json)+keyValueSize)
 	result = append(result, json[:end]...)
-	
+
 	if !isEmpty {
 		result = append(result, ',')
 	}
-	
+
 	result = append(result, '"')
 	result = append(result, key...)
 	result = append(result, '"', ':')
 	result = append(result, encodedValue...)
 	result = append(result, json[end:]...)
-	
+
 	return result, true, nil
 }
 
@@ -281,26 +281,31 @@ func ultraFastDotPathSet(json []byte, path string, encodedValue []byte) ([]byte,
 		return nil, false, nil
 	}
 
-	// Navigate to the target location
+	// For 2-part paths like "address.city", use specialized fast navigation
+	if len(parts) == 2 {
+		return ultraFastTwoPartSet(json, parts[0], parts[1], encodedValue)
+	}
+
+	// Navigate to the target location for 3-part paths
 	data := json
 	absoluteOffset := 0
-	
+
 	for _, part := range parts[:len(parts)-1] {
 		start, end := getObjectValueRange(data, part)
 		if start < 0 {
 			return nil, false, nil // Path doesn't exist
 		}
-		
+
 		// Update absolute offset
 		absoluteOffset += start
-		
+
 		data = data[start:end]
 	}
 
 	// Find and replace the final key
 	finalKey := parts[len(parts)-1]
 	keyStart, valueStart, valueEnd := findKeyValueRange(data, finalKey)
-	
+
 	if keyStart < 0 {
 		return nil, false, nil // Final key doesn't exist
 	}
@@ -315,7 +320,49 @@ func ultraFastDotPathSet(json []byte, path string, encodedValue []byte) ([]byte,
 	result = append(result, json[:absoluteValueStart]...)
 	result = append(result, encodedValue...)
 	result = append(result, json[absoluteValueEnd:]...)
-	
+
+	return result, true, nil
+}
+
+// ultraFastTwoPartSet optimizes the common case of "parent.child" paths
+func ultraFastTwoPartSet(json []byte, parentKey, childKey string, encodedValue []byte) ([]byte, bool, error) {
+	// Find parent object value range
+	parentStart, parentEnd := getObjectValueRange(json, parentKey)
+	if parentStart < 0 {
+		return nil, false, nil
+	}
+
+	// Get the parent object data
+	parentData := json[parentStart:parentEnd]
+
+	// Find child key within parent object
+	keyStart, valueStart, valueEnd := findKeyValueRange(parentData, childKey)
+	if keyStart < 0 {
+		return nil, false, nil
+	}
+
+	// Calculate absolute positions
+	absoluteValueStart := parentStart + valueStart
+	absoluteValueEnd := parentStart + valueEnd
+
+	// Use pre-allocated slice optimization for better performance
+	sizeDiff := len(encodedValue) - (absoluteValueEnd - absoluteValueStart)
+	newSize := len(json) + sizeDiff
+
+	var result []byte
+	if sizeDiff <= 0 {
+		// Value is same size or smaller - can reuse original slice capacity
+		result = make([]byte, newSize, len(json))
+	} else {
+		// Value is larger - need more capacity
+		result = make([]byte, newSize, newSize)
+	}
+
+	// Copy in three parts: before, new value, after
+	copy(result[:absoluteValueStart], json[:absoluteValueStart])
+	copy(result[absoluteValueStart:absoluteValueStart+len(encodedValue)], encodedValue)
+	copy(result[absoluteValueStart+len(encodedValue):], json[absoluteValueEnd:])
+
 	return result, true, nil
 }
 
@@ -1925,7 +1972,7 @@ func fastEncodeJSONValue(v interface{}) ([]byte, error) {
 	case string:
 		// Try to parse as JSON first for strings that look like JSON
 		if (strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}")) ||
-		   (strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")) {
+			(strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")) {
 			var jsonVal interface{}
 			if err := json.Unmarshal([]byte(val), &jsonVal); err == nil {
 				// It's valid JSON, marshal it directly
@@ -2322,20 +2369,20 @@ func setSimplePath(json []byte, path string, value interface{}, options SetOptio
 				// We need to find the container and replace the array
 				// Since we can't fix parent tracking easily, let's work around this
 				// by creating a new array without the element and replacing it in the data structure
-				
+
 				// Create new array without the deleted element
 				if lastIndex >= 0 && lastIndex < len(arr) {
 					newArr := make([]interface{}, len(arr)-1)
 					copy(newArr[:lastIndex], arr[:lastIndex])
 					copy(newArr[lastIndex:], arr[lastIndex+1:])
-					
+
 					// Now we need to replace this array in the data structure
 					// We'll manually navigate to find where this array is stored
 					var data interface{}
 					if err := JSON.Unmarshal(json, &data); err != nil {
 						return json, ErrInvalidJSON
 					}
-					
+
 					// Navigate the path to find the container and replace the array
 					pathParts := strings.Split(path, ".")
 					current := &data
@@ -2350,7 +2397,7 @@ func setSimplePath(json []byte, path string, value interface{}, options SetOptio
 							}
 						}
 					}
-					
+
 					// Marshal back to JSON
 					result, err := JSON.MarshalIndent(data, "", "  ")
 					if err != nil {
@@ -2928,7 +2975,7 @@ func convertToJSONValue(value interface{}) (interface{}, error) {
 	case string:
 		// Try to parse as JSON first for strings that look like JSON
 		if (strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}")) ||
-		   (strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) {
+			(strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")) {
 			var jsonVal interface{}
 			if err := json.Unmarshal([]byte(v), &jsonVal); err == nil {
 				return jsonVal, nil
@@ -3006,7 +3053,7 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 	// Navigate to the target location
 	window := data
 	baseOffset := 0
-	
+
 	for _, part := range parts[:len(parts)-1] {
 		var start, end int
 		if isAllDigits(part) {
@@ -3017,11 +3064,11 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 			// Object access
 			start, end = getObjectValueRange(window, part)
 		}
-		
+
 		if start < 0 {
 			return nil, false, nil // Path doesn't exist
 		}
-		
+
 		baseOffset += start
 		window = window[start:end]
 	}
@@ -3029,7 +3076,7 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 	// Now set the final key
 	finalKey := parts[len(parts)-1]
 	var keyStart, valueStart, valueEnd int
-	
+
 	if isAllDigits(finalKey) {
 		// Array element replacement
 		idx, _ := strconv.Atoi(finalKey)
@@ -3037,7 +3084,6 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 		if valueStart < 0 {
 			return nil, false, nil
 		}
-		keyStart = valueStart
 	} else {
 		// Object key replacement
 		keyStart, valueStart, valueEnd = findKeyValueRange(window, finalKey)
@@ -3050,11 +3096,11 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 	totalOffset := baseOffset + valueStart
 	resultSize := len(data) - (valueEnd - valueStart) + len(encodedValue)
 	result := make([]byte, 0, resultSize)
-	
+
 	result = append(result, data[:totalOffset]...)
 	result = append(result, encodedValue...)
 	result = append(result, data[baseOffset+valueEnd:]...)
-	
+
 	return result, true, nil
 }
 
