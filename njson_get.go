@@ -984,7 +984,7 @@ func fastFindArrayElement(data []byte, index int) (int, int) {
 		return -1, -1
 	}
 
-	// For large indices, use blazing fast raw comma scanning
+	// For large indices, use the fixed blazing fast comma scanning
 	if index > 10 {
 		return blazingFastCommaScanner(data, index)
 	}
@@ -1046,7 +1046,7 @@ func fastFindArrayElement(data []byte, index int) (int, int) {
 	return -1, -1
 }
 
-// blazingFastCommaScanner - extremely simple comma counting with unsafe pointers
+// blazingFastCommaScanner - extremely simple comma counting with proper JSON value skipping
 func blazingFastCommaScanner(data []byte, targetIndex int) (int, int) {
 	dataLen := len(data)
 
@@ -1067,19 +1067,24 @@ func blazingFastCommaScanner(data []byte, targetIndex int) (int, int) {
 		return start, end
 	}
 
-	// Use unsafe pointers for maximum speed
-	dataPtr := (*[1]byte)(unsafe.Pointer(&data[0]))
+	// Count commas, but properly skip over complete JSON values
 	commasFound := 0
+	i := 1
 
-	for i := 1; i < dataLen; i++ {
-		c := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
+	// Skip initial whitespace
+	for i < dataLen && data[i] <= ' ' {
+		i++
+	}
 
-		if c == ',' {
+	for i < dataLen {
+		// If we're at a comma and we've found enough, this is our target
+		if data[i] == ',' {
 			commasFound++
 			if commasFound == targetIndex {
-				// Found a comma at the target position
-				i++
-				for i < dataLen && (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i)))) <= ' ' {
+				// Found the comma before our target element
+				i++ // Skip the comma
+				// Skip whitespace after comma
+				for i < dataLen && data[i] <= ' ' {
 					i++
 				}
 				if i >= dataLen {
@@ -1092,22 +1097,21 @@ func blazingFastCommaScanner(data []byte, targetIndex int) (int, int) {
 				}
 				return start, end
 			}
-		} else if c == '"' {
-			// Ultra-fast string skip with unsafe pointers
-			i++
-			for i < dataLen {
-				ch := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
-				if ch == '"' {
-					break
-				}
-				if ch == '\\' {
-					i++
-					if i >= dataLen {
-						break
-					}
-				}
+			i++ // Skip the comma
+			// Skip whitespace after comma
+			for i < dataLen && data[i] <= ' ' {
 				i++
 			}
+		} else if data[i] == ']' {
+			// End of array reached
+			break
+		} else {
+			// Skip the entire JSON value (object, array, string, number, boolean, null)
+			end := ultraFastSkipValue(data, i)
+			if end == -1 {
+				return -1, -1
+			}
+			i = end
 		}
 	}
 

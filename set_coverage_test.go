@@ -100,6 +100,8 @@ func TestDeleteOperationsCoverageBoost(t *testing.T) {
 		t.Errorf("Delete array error: %v", err)
 	}
 	remaining := Get(result, "tags").Array()
+	t.Log(remaining)
+
 	if len(remaining) >= 3 {
 		t.Errorf("Delete array element failed, still has %d elements", len(remaining))
 	}
