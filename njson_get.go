@@ -3331,19 +3331,19 @@ func ultraFastFilterPath(data []byte, path string) (Result, bool) {
 	if len(parts) != 2 {
 		return Result{Type: TypeUndefined}, false
 	}
-	
+
 	arrayKey := parts[0]
 	remaining := parts[1]
-	
+
 	// Parse the filter expression and result key
 	filterEnd := strings.Index(remaining, ")].")
 	if filterEnd == -1 {
 		return Result{Type: TypeUndefined}, false
 	}
-	
+
 	filterExpr := remaining[:filterEnd]
 	resultKey := remaining[filterEnd+3:]
-	
+
 	// Parse filter expression like "metadata.priority>3"
 	var filterPath, operator, filterValue string
 	for _, op := range []string{">=", "<=", "!=", "==", ">", "<", "="} {
@@ -3354,17 +3354,17 @@ func ultraFastFilterPath(data []byte, path string) (Result, bool) {
 			break
 		}
 	}
-	
+
 	if operator == "" {
 		return Result{Type: TypeUndefined}, false
 	}
-	
+
 	// Get the array
 	arrayResult := getSimplePath(data, arrayKey)
 	if arrayResult.Type != TypeArray {
 		return Result{Type: TypeUndefined}, false
 	}
-	
+
 	// Fast array filtering with direct byte manipulation
 	return fastArrayFilter(arrayResult.Raw, filterPath, operator, filterValue, resultKey), true
 }
@@ -3372,7 +3372,7 @@ func ultraFastFilterPath(data []byte, path string) (Result, bool) {
 // fastArrayFilter efficiently filters array elements and extracts result keys
 func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, resultKey string) Result {
 	results := make([][]byte, 0, 16) // Pre-allocate for common case
-	
+
 	// Parse filter value once
 	var filterNum float64
 	var filterIsNum bool
@@ -3382,7 +3382,7 @@ func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, result
 			filterIsNum = true
 		}
 	}
-	
+
 	// Iterate through array elements with minimal parsing
 	start := 1 // Skip '['
 	for start < len(arrayData) {
@@ -3390,19 +3390,19 @@ func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, result
 		for start < len(arrayData) && arrayData[start] <= ' ' {
 			start++
 		}
-		
+
 		if start >= len(arrayData) || arrayData[start] == ']' {
 			break
 		}
-		
+
 		// Find end of this element
 		end := ultraFastSkipValue(arrayData, start)
 		if end == -1 {
 			break
 		}
-		
+
 		elementData := arrayData[start:end]
-		
+
 		// Fast filter evaluation
 		if fastEvaluateFilter(elementData, filterPath, operator, filterValue, filterNum, filterIsNum) {
 			// Extract result key
@@ -3410,18 +3410,18 @@ func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, result
 				results = append(results, resultBytes)
 			}
 		}
-		
+
 		start = end
 		// Skip comma and whitespace
 		for start < len(arrayData) && (arrayData[start] <= ' ' || arrayData[start] == ',') {
 			start++
 		}
 	}
-	
+
 	if len(results) == 0 {
 		return Result{Type: TypeUndefined}
 	}
-	
+
 	// Build result array with optimized allocation
 	totalSize := 2 // brackets
 	for i, result := range results {
@@ -3430,7 +3430,7 @@ func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, result
 		}
 		totalSize += len(result)
 	}
-	
+
 	raw := make([]byte, 0, totalSize)
 	raw = append(raw, '[')
 	for i, result := range results {
@@ -3440,7 +3440,7 @@ func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, result
 		raw = append(raw, result...)
 	}
 	raw = append(raw, ']')
-	
+
 	return Result{
 		Type: TypeArray,
 		Raw:  raw,
@@ -3454,7 +3454,7 @@ func fastEvaluateFilter(elementData []byte, filterPath, operator, filterValue st
 	if len(valueBytes) == 0 {
 		return false
 	}
-	
+
 	// Quick value extraction and comparison
 	if filterIsNum {
 		// Parse number from value bytes
@@ -3483,7 +3483,7 @@ func fastEvaluateFilter(elementData []byte, filterPath, operator, filterValue st
 			return strVal != filterValue
 		}
 	}
-	
+
 	return false
 }
 
@@ -3491,14 +3491,14 @@ func fastEvaluateFilter(elementData []byte, filterPath, operator, filterValue st
 func fastNavigateToPath(data []byte, path string) []byte {
 	current := data
 	parts := strings.Split(path, ".")
-	
+
 	for _, part := range parts {
 		current = getObjectValue(current, part)
 		if len(current) == 0 {
 			return nil
 		}
 	}
-	
+
 	return current
 }
 
@@ -3514,19 +3514,19 @@ func fastParseNumber(data []byte) float64 {
 	for start < len(data) && data[start] <= ' ' {
 		start++
 	}
-	
+
 	// Find end of number
 	end := start
 	for end < len(data) && (data[end] >= '0' && data[end] <= '9' || data[end] == '.' || data[end] == '-' || data[end] == '+' || data[end] == 'e' || data[end] == 'E') {
 		end++
 	}
-	
+
 	if end > start {
 		if num, err := strconv.ParseFloat(string(data[start:end]), 64); err == nil {
 			return num
 		}
 	}
-	
+
 	return 0
 }
 
@@ -3537,11 +3537,11 @@ func fastParseString(data []byte) string {
 	for start < len(data) && data[start] <= ' ' {
 		start++
 	}
-	
+
 	if start >= len(data) || data[start] != '"' {
 		return ""
 	}
-	
+
 	// Find end of string
 	end := start + 1
 	for end < len(data) && data[end] != '"' {
@@ -3550,11 +3550,11 @@ func fastParseString(data []byte) string {
 		}
 		end++
 	}
-	
+
 	if end < len(data) {
 		return string(data[start+1 : end])
 	}
-	
+
 	return ""
 }
 
@@ -3566,29 +3566,29 @@ func fastWildcardKeyAccess(current Result, key string) Result {
 
 	// Pre-allocate for results
 	results := make([]Result, 0, 4)
-	
+
 	// Optimize for arrays vs objects
 	if current.Type == TypeArray {
 		// For arrays, iterate through elements and get the key from each
 		start := 1 // Skip '['
 		data := current.Raw
-		
+
 		for start < len(data) {
 			// Skip whitespace
 			for start < len(data) && data[start] <= ' ' {
 				start++
 			}
-			
+
 			if start >= len(data) || data[start] == ']' {
 				break
 			}
-			
+
 			// Find end of this element
 			end := ultraFastSkipValue(data, start)
 			if end == -1 {
 				break
 			}
-			
+
 			// Parse element and get the key
 			element := fastParseValue(data[start:end])
 			if element.Type == TypeObject {
@@ -3598,7 +3598,7 @@ func fastWildcardKeyAccess(current Result, key string) Result {
 					results = append(results, result)
 				}
 			}
-			
+
 			start = end
 			// Skip comma and whitespace
 			for start < len(data) && (data[start] <= ' ' || data[start] == ',') {
@@ -3618,16 +3618,16 @@ func fastWildcardKeyAccess(current Result, key string) Result {
 			return true
 		})
 	}
-	
+
 	if len(results) == 0 {
 		return Result{Type: TypeUndefined}
 	}
-	
+
 	// If only one result, return it directly
 	if len(results) == 1 {
 		return results[0]
 	}
-	
+
 	// Build array result with optimized allocation
 	totalSize := 2 // brackets
 	for i, result := range results {
@@ -3636,7 +3636,7 @@ func fastWildcardKeyAccess(current Result, key string) Result {
 		}
 		totalSize += len(result.Raw)
 	}
-	
+
 	raw := make([]byte, 0, totalSize)
 	raw = append(raw, '[')
 	for i, result := range results {
@@ -3646,7 +3646,7 @@ func fastWildcardKeyAccess(current Result, key string) Result {
 		raw = append(raw, result.Raw...)
 	}
 	raw = append(raw, ']')
-	
+
 	return Result{
 		Type: TypeArray,
 		Raw:  raw,
