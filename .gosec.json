@@ -47,7 +47,7 @@
   "Severity": "medium",
   "Confidence": "medium",
   "Concurrency": 12,
-  "Format": "sarif",
+  "Format": "text",
   "ExcludeRules": [
     "G103"
   ],
