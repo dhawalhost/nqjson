@@ -125,9 +125,6 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         arch: [amd64, arm64]
-        exclude:
-          - os: windows-latest
-            arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v5
@@ -139,7 +136,7 @@ jobs:
         
     - name: Build
       env:
-        GOOS: ${{ runner.os == 'Linux' && 'linux' || runner.os == 'Windows' && 'windows' || 'darwin' }}
+        GOOS: ${{ runner.os == 'Linux' && 'linux' }}
         GOARCH: ${{ matrix.arch }}
       run: go build -v ./...
       
