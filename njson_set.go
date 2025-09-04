@@ -602,53 +602,63 @@ func setFastReplace(data []byte, path string, value interface{}) ([]byte, bool, 
 // trySimpleFastPaths runs the collection of fast-path checks for simple set paths.
 // It returns (result, ok, err) matching the other fast-path helpers' conventions.
 func trySimpleFastPaths(json []byte, path string, value interface{}, opts SetOptions) ([]byte, bool, error) {
-	// Try ultra-fast single key operations first (highest priority)
-	if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
-		// Ultra-fast replace for existing keys (works on any JSON format)
-		if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
-			return fast, true, nil
-		}
-		// Ultra-fast add for new keys (compact JSON only)
-		if !isLikelyPretty(json) {
-			if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
-				return fast, true, nil
+	type fastStrategy struct {
+		pred func() bool
+		run  func() ([]byte, bool, error)
+	}
+
+	strategies := []fastStrategy{
+		{pred: func() bool { return isSingleSimpleKey(path) }, run: func() ([]byte, bool, error) { return tryUltraFastSingleKey(json, path, value) }},
+		{pred: func() bool { return isSimpleDotPath(path) }, run: func() ([]byte, bool, error) { return setFastSimpleDotPath(json, path, value) }},
+		{pred: func() bool { return looksLikeArrayElementPath(path) }, run: func() ([]byte, bool, error) { return setFastArrayElement(json, path, value) }},
+		{pred: func() bool { return true }, run: func() ([]byte, bool, error) { return setFastReplace(json, path, value) }},
+		{pred: func() bool { return !isLikelyPretty(json) }, run: func() ([]byte, bool, error) { return setFastInsertOrAppend(json, path, value) }},
+		{pred: func() bool { return true }, run: func() ([]byte, bool, error) { return setFastDeepCreateObjects(json, path, value) }},
+	}
+
+	for _, s := range strategies {
+		if s.pred() {
+			if out, ok, err := s.run(); err == nil && ok {
+				return out, true, nil
 			}
 		}
 	}
-
-	// Fast path for simple dot notation (higher priority than generic replace)
-	if strings.Count(path, ".") <= 3 && !strings.Contains(path, "[") {
-		if fast, ok, err := setFastSimpleDotPath(json, path, value); err == nil && ok {
-			return fast, true, nil
-		}
-	}
-
-	// Fast path for array element updates (higher priority)
-	if strings.Contains(path, ".") && (strings.Contains(path, "0") || strings.Contains(path, "1") || strings.Contains(path, "2")) {
-		if fast, ok, err := setFastArrayElement(json, path, value); err == nil && ok {
-			return fast, true, nil
-		}
-	}
-
-	// Generic fast replace (existing values)
-	if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
-		return fast, true, nil
-	}
-
-	// Fast insert/append (new values) - compact JSON only
-	if !isLikelyPretty(json) {
-		if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
-			return fast, true, nil
-		}
-	}
-
-	// Deep create nested objects quickly
-	if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
-		return fast, true, nil
-	}
-
 	return nil, false, nil
 }
+
+// isSingleSimpleKey returns true when path is a single, dot-free key.
+func isSingleSimpleKey(path string) bool {
+	return len(path) > 0 && !strings.Contains(path, ".") && !strings.Contains(path, "[")
+}
+
+// tryUltraFastSingleKey attempts replace/add for a single key path.
+func tryUltraFastSingleKey(json []byte, path string, value interface{}) ([]byte, bool, error) {
+	if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
+		return fast, true, nil
+	}
+	if !isLikelyPretty(json) {
+		if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
+			return fast, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// isSimpleDotPath returns true when the path is short dot-only notation.
+func isSimpleDotPath(path string) bool {
+	return strings.Count(path, ".") <= 3 && !strings.Contains(path, "[")
+}
+
+// looksLikeArrayElementPath is a heuristic to quickly route array element updates.
+func looksLikeArrayElementPath(path string) bool {
+	if !strings.Contains(path, ".") {
+		return false
+	}
+	return strings.Contains(path, "0") || strings.Contains(path, "1") || strings.Contains(path, "2")
+}
+
+// tryInsertAppendIfCompact routes to insert/append when JSON appears compact.
+// (removed) tryInsertAppendIfCompact: inlined via strategies in trySimpleFastPaths
 
 // isLikelyPretty returns true if the JSON appears to be pretty-printed (contains newlines/indentation)
 func isLikelyPretty(data []byte) bool {
@@ -1013,54 +1023,20 @@ func createArrayInsertion(window []byte, endArr int, curLen int, targetIdx int, 
 // setFastInsertOrAppend can add a new object field or append/extend an array element when parent exists.
 // Returns (result, ok, err). Only supports simple dot paths and compact JSON. No merges or deletions.
 func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte, bool, error) {
-	// Don't use fast path for deletion marker
-	if value == deletionMarkerValue {
+	// Initialize context and validate inputs
+	ctx, parts, ok := initFastInsertOrAppendContext(data, path, value)
+	if !ok {
 		return nil, false, nil
-	}
-
-	if len(data) == 0 || value == nil {
-		return nil, false, nil
-	}
-	parts := strings.Split(path, ".")
-	if len(parts) == 0 {
-		return nil, false, nil
-	}
-
-	// Create context for path navigation
-	ctx := &FastInsertContext{
-		data:       data,
-		window:     data,
-		baseOffset: 0,
-		parts:      parts,
 	}
 
 	// Walk to parent container window
-	for i, part := range parts[:len(parts)-1] {
-		success, err := fastPathHandler(ctx, part, i)
-		if !success {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		_ = i // Silence unused variable warning
+	if success, err := fastInsertWalkToParent(ctx, parts); !success || err != nil {
+		return nil, false, err
 	}
 
-	// Now window is the parent container's value bytes; parentStart..parentEnd in data
-	parentStart := ctx.baseOffset
-	parentEnd := parentStart + len(ctx.window)
-	if parentStart < 0 || parentEnd > len(data) || parentStart >= parentEnd {
-		return nil, false, nil
-	}
-
-	// Determine last part and whether parent is object or array
-	last := parts[len(parts)-1]
-	// Peek first non-space of window to determine type
-	ws := 0
-	for ws < len(ctx.window) && ctx.window[ws] <= ' ' {
-		ws++
-	}
-	if ws >= len(ctx.window) {
+	// Compute parent bounds in original data
+	parentStart, parentEnd, ok := getFastInsertParentBounds(ctx, data)
+	if !ok {
 		return nil, false, nil
 	}
 
@@ -1070,17 +1046,81 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 		return nil, false, err
 	}
 
-	// Handle object insertion
-	if ctx.window[ws] == '{' {
+	// Determine container type and dispatch
+	container, _, ok := peekContainerTypeWS(ctx.window)
+	if !ok {
+		return nil, false, nil
+	}
+	last := parts[len(parts)-1]
+	switch container {
+	case '{':
 		return handleObjectInsertion(data, ctx.window, parentStart, parentEnd, last, encVal)
-	}
-
-	// Handle array insertion
-	if ctx.window[ws] == '[' {
+	case '[':
 		return handleArrayInsertion(data, ctx.window, parentStart, parentEnd, last, encVal)
+	default:
+		return nil, false, nil
 	}
+}
 
-	return nil, false, nil
+// initFastInsertOrAppendContext validates inputs and creates a FastInsertContext with path parts.
+func initFastInsertOrAppendContext(data []byte, path string, value interface{}) (*FastInsertContext, []string, bool) {
+	if value == deletionMarkerValue {
+		return nil, nil, false
+	}
+	if len(data) == 0 || value == nil {
+		return nil, nil, false
+	}
+	parts := strings.Split(path, ".")
+	if len(parts) == 0 {
+		return nil, nil, false
+	}
+	ctx := &FastInsertContext{
+		data:       data,
+		window:     data,
+		baseOffset: 0,
+		parts:      parts,
+	}
+	return ctx, parts, true
+}
+
+// fastInsertWalkToParent navigates to the parent container window for insertion.
+func fastInsertWalkToParent(ctx *FastInsertContext, parts []string) (bool, error) {
+	for i, part := range parts[:len(parts)-1] {
+		success, err := fastPathHandler(ctx, part, i)
+		if !success {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// getFastInsertParentBounds returns the bounds of the parent container in the original data buffer.
+func getFastInsertParentBounds(ctx *FastInsertContext, data []byte) (int, int, bool) {
+	parentStart := ctx.baseOffset
+	parentEnd := parentStart + len(ctx.window)
+	if parentStart < 0 || parentEnd > len(data) || parentStart >= parentEnd {
+		return 0, 0, false
+	}
+	return parentStart, parentEnd, true
+}
+
+// peekContainerTypeWS returns the first non-space character of window and its index.
+func peekContainerTypeWS(window []byte) (byte, int, bool) {
+	ws := 0
+	for ws < len(window) && window[ws] <= ' ' {
+		ws++
+	}
+	if ws >= len(window) {
+		return 0, 0, false
+	}
+	c := window[ws]
+	if c != '{' && c != '[' {
+		return 0, 0, false
+	}
+	return c, ws, true
 }
 
 // setFastDeepCreateObjects creates missing nested object keys for dot-only object paths on compact JSON.
@@ -1397,85 +1437,60 @@ func setFastReplaceSimpleKey(data []byte, key string, value interface{}) ([]byte
 // findKeyValueRange finds the position of a key and its value in a JSON object
 // Returns keyStart, valueStart, valueEnd (or -1, -1, -1 if not found)
 func findKeyValueRange(data []byte, key string) (int, int, int) {
-	// Skip to opening brace
-	i := 0
-	for i < len(data) && data[i] <= ' ' {
-		i++
-	}
-	if i >= len(data) || data[i] != '{' {
+	// Move to start of object content
+	i := skipToObjectStart(data)
+	if i == -1 {
 		return -1, -1, -1
 	}
-	i++
 
-	keyLen := len(key)
+	keyBytes := []byte(key)
+	keyLen := len(keyBytes)
+
 	for i < len(data) {
-		// Skip whitespace
+		// Skip whitespace and check end
 		i = skipSpaces(data, i)
 		if i >= len(data) || data[i] == '}' {
 			break
 		}
 
-		// Expect a key (quoted string)
+		// Expect a quoted key
 		if data[i] != '"' {
 			return -1, -1, -1
 		}
 		keyStart := i
 
-		// Read unquoted key name
+		// Read key name (unquoted bounds) and position after closing quote
 		nameStart, nameEnd, after, err := readUnquotedKey(data, i)
 		if err != nil {
 			return -1, -1, -1
 		}
 
-		// Check if this key matches
-		currentKeyLen := nameEnd - nameStart
-		if currentKeyLen == keyLen && bytes.Equal(data[nameStart:nameEnd], []byte(key)) {
-			// Skip to colon after closing quote
-			i = skipSpaces(data, after)
-			if i >= len(data) || data[i] != ':' {
-				return -1, -1, -1
-			}
-			i++
-
-			// Skip whitespace after colon
-			i = skipSpaces(data, i)
-
-			valueStart := i
-			valueEnd := findValueEnd(data, i)
-			if valueEnd == -1 {
-				return -1, -1, -1
-			}
-
-			return keyStart, valueStart, valueEnd
-		}
-
-		// Not a match: advance after the closing quote
-		i = after
-
-		// Skip to colon
-		i = skipSpaces(data, i)
+		// Move to colon and then to value start
+		i = skipSpaces(data, after)
 		if i >= len(data) || data[i] != ':' {
 			return -1, -1, -1
 		}
 		i++
+		valueStart := skipSpaces(data, i)
 
-		// Skip value
-		valueEnd := findValueEnd(data, i)
+		// Find value end
+		valueEnd := findValueEnd(data, valueStart)
 		if valueEnd == -1 {
 			return -1, -1, -1
 		}
-		i = valueEnd
 
-		// Skip to comma or end of object
-		i = skipSpaces(data, i)
-		if i >= len(data) || data[i] == '}' {
-			break
+		// If key matches, return ranges
+		if (nameEnd-nameStart) == keyLen && bytes.Equal(data[nameStart:nameEnd], keyBytes) {
+			return keyStart, valueStart, valueEnd
 		}
-		if data[i] == ',' {
+
+		// Advance to next pair (skip spaces and optional comma)
+		i = skipSpaces(data, valueEnd)
+		if i < len(data) && data[i] == ',' {
 			i++
-		} else {
-			break
+			continue
 		}
+		break
 	}
 
 	return -1, -1, -1
@@ -1929,74 +1944,98 @@ func deleteFastPath(data []byte, path string) ([]byte, bool) {
 
 // deleteFastSimpleKey handles deletion of top-level keys using direct byte manipulation
 func deleteFastSimpleKey(data []byte, key string) (result []byte, changed bool) {
-	// Skip whitespace to find start of object
+	start, ok := findDeletionObjectStart(data)
+	if !ok {
+		return data, false
+	}
+
+	keyQuoted := append([]byte{'"'}, append([]byte(key), '"')...) // "key"
+	pos := start + 1
+	for pos < len(data) {
+		// Parse next pair or detect end
+		pairStart, currentKey, valueEnd, nextPos, done, valid := readNextDeletionPair(data, pos, start)
+		if done {
+			break
+		}
+		if !valid {
+			return data, false
+		}
+
+		// Match and remove
+		if bytes.Equal(currentKey, keyQuoted) {
+			return removeDeletionPairAt(data, start, pairStart, valueEnd)
+		}
+
+		// Advance
+		if nextPos < 0 {
+			break
+		}
+		pos = nextPos
+	}
+	return data, false
+}
+
+// findDeletionObjectStart finds the '{' start after skipping spaces.
+func findDeletionObjectStart(data []byte) (int, bool) {
 	start := 0
 	for start < len(data) && data[start] <= ' ' {
 		start++
 	}
-
 	if start >= len(data) || data[start] != '{' {
-		return data, false // Not an object
+		return 0, false
+	}
+	return start, true
+}
+
+// readNextDeletionPair parses the next key-value pair; returns positions and state flags.
+func readNextDeletionPair(data []byte, pos int, start int) (pairStart int, key []byte, valueEnd int, nextPos int, done bool, valid bool) {
+	pos = skipSpaces(data, pos)
+	if pos >= len(data) || data[pos] == '}' {
+		return 0, nil, 0, -1, true, true
+	}
+	if data[pos] != '"' {
+		return 0, nil, 0, -1, false, false
 	}
 
-	keyStr := `"` + key + `"`
-	pos := start + 1
-
-	for pos < len(data) {
-		// Skip whitespace and check end
-		pos = skipSpaces(data, pos)
-		if pos >= len(data) || data[pos] == '}' {
-			break // End of object
-		}
-
-		// Expect quoted key
-		if data[pos] != '"' {
-			return data, false // Invalid JSON
-		}
-
-		pairStart := pos
-
-		// Read key (including quotes)
-		currentKey, keyEnd, err := readQuotedSegment(data, pos)
-		if err != nil {
-			return data, false
-		}
-
-		// Move position to after key and skip to colon
-		pos = skipSpaces(data, keyEnd)
-		if pos >= len(data) || data[pos] != ':' {
-			return data, false // Invalid JSON
-		}
-		pos++ // skip colon
-		pos = skipSpaces(data, pos)
-
-		// Find end of value
-		valueEnd := findValueEnd(data, pos)
-		if valueEnd == -1 {
-			return data, false // Invalid JSON
-		}
-
-		// If this is the target key, compute bounds and remove
-		if string(currentKey) == keyStr {
-			pairStartAdj, pairEnd := computePairBounds(data, start, pairStart, valueEnd)
-			result = make([]byte, 0, len(data)-(pairEnd-pairStartAdj))
-			result = append(result, data[:pairStartAdj]...)
-			result = append(result, data[pairEnd:]...)
-			return result, true
-		}
-
-		// Move to next pair
-		pos = valueEnd
-		pos = skipSpaces(data, pos)
-		if pos < len(data) && data[pos] == ',' {
-			pos++
-			continue
-		} else if pos < len(data) && data[pos] == '}' {
-			break
-		}
+	pairStart = pos
+	// Read quoted key
+	keyBytes, keyEnd, err := readQuotedSegment(data, pos)
+	if err != nil {
+		return 0, nil, 0, -1, false, false
 	}
 
-	return data, false // Key not found
+	// Move to value start
+	pos = skipSpaces(data, keyEnd)
+	if pos >= len(data) || data[pos] != ':' {
+		return 0, nil, 0, -1, false, false
+	}
+	pos++
+	pos = skipSpaces(data, pos)
+
+	// Find value end
+	ve := findValueEnd(data, pos)
+	if ve == -1 {
+		return 0, nil, 0, -1, false, false
+	}
+
+	// Compute next position (after optional comma)
+	np := skipSpaces(data, ve)
+	if np < len(data) && data[np] == ',' {
+		np++
+	} else if np < len(data) && data[np] == '}' {
+		// end reached; will signal done on next loop
+	}
+
+	return pairStart, keyBytes, ve, np, false, true
+}
+
+// removeDeletionPairAt removes the pair spanning pairStart..valueEnd, adjusting commas/whitespace.
+func removeDeletionPairAt(data []byte, start, pairStart, valueEnd int) ([]byte, bool) {
+	pairStartAdj, pairEnd := computePairBounds(data, start, pairStart, valueEnd)
+	out := make([]byte, 0, len(data)-(pairEnd-pairStartAdj))
+	out = append(out, data[:pairStartAdj]...)
+	out = append(out, data[pairEnd:]...)
+	return out, true
 }
 
 // skipSpaces advances pos over ASCII spaces and returns new position
@@ -3345,89 +3384,89 @@ func processNumericPart(context *PathContext, part string, pathIndex int, isLast
 
 // processObjectKeyAccess handles regular object key access
 func processObjectKeyAccess(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string) error {
-	// Check if current is an array and part is numeric
+	// Array numeric access (dot notation)
 	if arr, ok := (*context.current).([]interface{}); ok && isAllDigits(part) {
-		// Array access with dot notation (e.g., tags.1)
-		idx, err := strconv.Atoi(part)
-		if err != nil {
-			return ErrInvalidPath
-		}
+		return handleDotArrayAccess(context, arr, part, pathIndex, isLast, pathParts)
+	}
+	// Regular object key access
+	return handleRegularObjectKeyAccess(context, part, pathIndex, isLast, pathParts)
+}
 
-		// Don't update parent/lastKey - keep them pointing to the container
-		context.lastIndex = idx
-		context.isArrayElement = true
-
-		// Ensure array has enough elements
-		if idx >= len(arr) {
-			if isLast {
-				// Expand the array if this is the last path component
-				newArr := make([]interface{}, idx+1)
-				copy(newArr, arr)
-				for i := len(arr); i < idx; i++ {
-					newArr[i] = nil
-				}
-				*context.current = newArr
-				arr = newArr
-			} else {
-				return ErrArrayIndex
-			}
-		}
-
-		// Get the value at this index (only if not last)
-		if !isLast {
-			next := arr[idx]
-			context.current = &next
-
-			// Check if we need to create a new object/array for the next part
-			if pathIndex+1 < len(pathParts) {
-				nextPart := pathParts[pathIndex+1]
-				if next == nil {
-					if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
-						next = make([]interface{}, 0)
-					} else {
-						next = make(map[string]interface{})
-					}
-					arr[idx] = next
-					*context.current = next
-				}
-			}
-		}
-	} else {
-		// Regular object key access
-		m, ok := (*context.current).(map[string]interface{})
-		if !ok {
-			// If not a map, create one (only if last)
-			if isLast && context.parent != nil {
-				newMap := make(map[string]interface{})
-				setInParent(context.parent, context.lastKey, context.lastIndex, context.isArrayElement, newMap)
-				m = newMap
-				*context.current = m
-			} else {
-				return ErrTypeMismatch
-			}
-		}
-
-		context.parent = context.current
-		context.lastKey = part
-		context.isArrayElement = false
-
-		next, exists := m[part]
-		if !exists {
-			if isLast {
-				// leave empty; will set later
-			} else {
-				nextPart := pathParts[pathIndex+1]
-				if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
-					next = make([]interface{}, 0)
-				} else {
-					next = make(map[string]interface{})
-				}
-				m[part] = next
-			}
-		}
-		context.current = &next
+// handleDotArrayAccess processes dot-notation numeric access into an array (e.g., tags.1)
+func handleDotArrayAccess(context *PathContext, arr []interface{}, part string, pathIndex int, isLast bool, pathParts []string) error {
+	idx, err := strconv.Atoi(part)
+	if err != nil {
+		return ErrInvalidPath
 	}
 
+	// Keep parent references pointing to the container
+	context.lastIndex = idx
+	context.isArrayElement = true
+
+	// Ensure array has enough elements
+	if idx >= len(arr) {
+		if isLast {
+			newArr := make([]interface{}, idx+1)
+			copy(newArr, arr)
+			for i := len(arr); i < idx; i++ {
+				newArr[i] = nil
+			}
+			*context.current = newArr
+			arr = newArr
+		} else {
+			return ErrArrayIndex
+		}
+	}
+
+	// For non-last segments, dive into the element, creating container if needed
+	if !isLast {
+		next := arr[idx]
+		context.current = &next
+		if pathIndex+1 < len(pathParts) && next == nil {
+			nextPart := pathParts[pathIndex+1]
+			if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+				next = make([]interface{}, 0)
+			} else {
+				next = make(map[string]interface{})
+			}
+			arr[idx] = next
+			*context.current = next
+		}
+	}
+	return nil
+}
+
+// handleRegularObjectKeyAccess processes object key access, creating containers when needed.
+func handleRegularObjectKeyAccess(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string) error {
+	m, ok := (*context.current).(map[string]interface{})
+	if !ok {
+		if isLast && context.parent != nil {
+			newMap := make(map[string]interface{})
+			setInParent(context.parent, context.lastKey, context.lastIndex, context.isArrayElement, newMap)
+			m = newMap
+			*context.current = m
+		} else {
+			return ErrTypeMismatch
+		}
+	}
+
+	context.parent = context.current
+	context.lastKey = part
+	context.isArrayElement = false
+
+	next, exists := m[part]
+	if !exists {
+		if !isLast {
+			nextPart := pathParts[pathIndex+1]
+			if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+				next = make([]interface{}, 0)
+			} else {
+				next = make(map[string]interface{})
+			}
+			m[part] = next
+		}
+	}
+	context.current = &next
 	return nil
 }
 
