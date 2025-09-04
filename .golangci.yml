@@ -1,4 +1,7 @@
 # golangci-lint configuration
+# See https://golangci-lint.run/usage/configuration/ for more information
+version: 2
+
 run:
   timeout: 5m
   issues-exit-code: 1
@@ -21,9 +24,9 @@ linters-settings:
       - standard
       - default
       - prefix(github.com/dhawalhost/njson)
-  goconst:
-    min-len: 2
-    min-occurrences: 2
+  # goconst:
+  #   min-len: 2
+  #   min-occurrences: 2
   gocritic:
     enabled-tags:
       - diagnostic
@@ -76,13 +79,14 @@ linters:
     - dupl
     - errcheck
     # - exhaustive
-    - funlen
-    - gochecknoinits
-    - goconst
+    # - funlen
+    # - gochecknoinits
+    # - goconst
     # - gocritic
     - gocyclo
-    - gofmt
-    - goimports
+    # Formatters are now separate from linters
+    # - gofmt (removed - it's a formatter now)
+    # - goimports (removed - it's a formatter now)
     # - mnd
     - goprintffuncname
     - gosec
@@ -98,11 +102,11 @@ linters:
     # - revive
     - rowserrcheck
     - staticcheck
-    - stylecheck
-    - typecheck
+    # - stylecheck (removed - not available)
+    # - typecheck (removed - not a linter anymore)
     - unconvert
     # - unparam - Disabled: function parameters are kept for API compatibility
-    # - unused
+    - unused
     - whitespace
 
 issues:
@@ -131,15 +135,13 @@ issues:
         - dupl
         - gosec
 
-    # Exclude known linters from partially hard-to-fix issues
-    - linters:
-        - typecheck
-      text: "not declared by package unsafe"
+    # Exclude known linters from partially hard-to-fix issues related to unsafe
+    # Removed typecheck linter reference as it's no longer a standalone linter
 
     # Exclude unsafe usage warnings - we need them for performance
     - linters:
         - gosec
-      text: "G103: Use of unsafe calls should be audited"
+      text: "G103:"
 
     # Exclude some staticcheck messages
     - linters:

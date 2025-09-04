@@ -661,7 +661,6 @@ func TestResult_Methods(t *testing.T) {
 				if r.Int() != 42 {
 					t.Errorf("Int() = %v, want 42", r.Int())
 				}
-
 			},
 		},
 		{
@@ -908,35 +907,6 @@ func TestUltraFastOptimizations(t *testing.T) {
 			}
 		}
 	})
-}
-
-func generateDeepJSON(depth int) []byte {
-	if depth == 0 {
-		return []byte(`{"value":"found"}`)
-	}
-
-	result := `{"level0":`
-	for i := 1; i < depth; i++ {
-		result += `{"level` + strconv.Itoa(i) + `":`
-	}
-	result += `{"value":"found"}`
-	for i := 0; i < depth; i++ {
-		result += `}`
-	}
-	return []byte(result)
-}
-
-func generateDeepPath(depth int) string {
-	if depth == 0 {
-		return "value"
-	}
-
-	result := "level0"
-	for i := 1; i < depth; i++ {
-		result += ".level" + strconv.Itoa(i)
-	}
-	result += ".value"
-	return result
 }
 
 // TestResultMethodsCoverage tests Result methods to improve coverage

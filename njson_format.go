@@ -4,7 +4,6 @@ package njson
 import (
 	"bytes"
 	"fmt"
-	"sync"
 )
 
 // Simple formatter functions that work correctly
@@ -375,13 +374,3 @@ type FormatOptions struct {
 	SortKeys   bool   // Whether to sort object keys
 	EscapeHTML bool   // Whether to escape HTML characters
 }
-
-// Buffer pools for efficiency
-var (
-	bufferPool = sync.Pool{
-		New: func() interface{} {
-			buf := make([]byte, 0, 4096)
-			return &buf
-		},
-	}
-)

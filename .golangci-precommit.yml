@@ -1,4 +1,7 @@
 # golangci-lint configuration for pre-commit (more lenient)
+# See https://golangci-lint.run/usage/configuration/ for more information
+version: 2
+
 run:
   timeout: 2m
   issues-exit-code: 1
@@ -6,9 +9,7 @@ run:
   modules-download-mode: readonly
 
 output:
-  formats:
-    - format: colored-line-number
-      path: stdout
+  format: colored-line-number
 
 linters-settings:
   gocyclo:
@@ -24,10 +25,7 @@ linters:
     - gosec
     - govet
     - staticcheck
-    - typecheck
     - ineffassign
-    - gofmt
-    - goimports
 
 issues:
   exclude-dirs:
