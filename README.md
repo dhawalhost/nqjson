@@ -1,6 +1,6 @@
 # NJSON
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/njson)](https://goreportcard.com/report/github.com/dhawalhost/njson)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/njson)](https://goreportcard.com/report/github.com/dhawalhost/njson) [![GoDoc](https://godoc.org/github.com/dhawalhost/njson?status.svg)](https://godoc.org/github.com/dhawalhost/njson)
 
 ## 📖 Documentation
 
@@ -10,7 +10,7 @@
 - **[Examples](EXAMPLES.md)** - Comprehensive examples for all use cases
 - **[Performance Benchmarks](BENCHMARKS.md)** - Detailed performance comparisons with other libraries
 <!-- - **[Go Doc](https://godoc.org/github.com/dhawalhost/njson)** - Online API documentation -->
-[![GoDoc](https://godoc.org/github.com/dhawalhost/njson?status.svg)](https://godoc.org/github.com/dhawalhost/njson)
+
 
 **njson** is a next-generation JSON manipulation library for Go that prioritizes performance and memory efficiency. Built for modern applications that need blazing-fast JSON operations with minimal allocations.
 
