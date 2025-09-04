@@ -1,76 +1,23 @@
 # golangci-lint configuration
 # See https://golangci-lint.run/usage/configuration/ for more information
-version: 2
+version: "2"
 
 run:
   timeout: 5m
   issues-exit-code: 1
   tests: true
-  modules-download-mode: readonly
 
 output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
-
-linters-settings:
-  dupl:
-    threshold: 100
-  funlen:
-    lines: 100
-    statements: 50
-  gci:
-    sections:
-      - standard
-      - default
-      - prefix(github.com/dhawalhost/njson)
-  # goconst:
-  #   min-len: 2
-  #   min-occurrences: 2
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport # https://github.com/go-critic/go-critic/issues/845
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-      - wrapperFunc
-  gocyclo:
-    min-complexity: 15
-  goimports:
-    local-prefixes: github.com/dhawalhost/njson
-  # mnd:
-  #   settings:
-  #     mnd:
-  #       # don't include the "operation" and "assign"
-  #       checks: argument,case,condition,return
-  govet:
-    settings:
-      printf:
-        funcs:
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  # lll:
-  #   line-length: 140
-  misspell:
-    locale: US
-  nolintlint:
-    allow-leading-space: true # don't require machine-readable nolint directives (i.e. with no leading space)
-    allow-unused: false # report any unused nolint directives
-    require-explanation: false # don't require an explanation for nolint directives
-    require-specific: false # don't require nolint directives to be specific about which linter is being skipped
+  formats:
+    text:
+      path: stdout
+      print-issued-lines: true
+      print-linter-name: true
+      colors: true
 
 linters:
-  # please, do not use `enable-all`: it's deprecated and will be removed soon.
-  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
-  disable-all: true
+  # v2: use default none instead of disable-all
+  default: none
   enable:
     - bodyclose
     - copyloopvar
@@ -84,10 +31,6 @@ linters:
     # - goconst
     # - gocritic
     - gocyclo
-    # Formatters are now separate from linters
-    # - gofmt (removed - it's a formatter now)
-    # - goimports (removed - it's a formatter now)
-    # - mnd
     - goprintffuncname
     - gosec
     # - gosimple
@@ -102,80 +45,80 @@ linters:
     # - revive
     - rowserrcheck
     - staticcheck
-    # - stylecheck (removed - not available)
-    # - typecheck (removed - not a linter anymore)
     - unconvert
-    # - unparam - Disabled: function parameters are kept for API compatibility
+    # - unparam
     - unused
     - whitespace
+  settings:
+    dupl:
+      threshold: 100
+    funlen:
+      lines: 100
+      statements: 50
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport # https://github.com/go-critic/go-critic/issues/845
+        - ifElseChain
+        - octalLiteral
+        - whyNoLint
+        - wrapperFunc
+    gocyclo:
+      min-complexity: 15
+    govet:
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+    misspell:
+      locale: US
+  exclusions:
+    paths:
+      - vendor
+      - ".*_test.go"
+    rules:
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocyclo
+      - linters:
+          - gocritic
+        text: "unnecessaryDefer:"
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - dupl
+          - gosec
+      - linters:
+          - staticcheck
+        text: "SA9003:"
+
+formatters:
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/dhawalhost/njson)
+    goimports:
+      local-prefixes:
+        - github.com/dhawalhost/njson
 
 issues:
-  # Excluding configuration per-path, per-linter, per-text and per-source
-  exclude-dirs:
-    - vendor
-  exclude-files:
-    - ".*_test.go"
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        # - mnd
-        - funlen
-        - gocyclo
-
-    # https://github.com/go-critic/go-critic/issues/926
-    - linters:
-        - gocritic
-      text: "unnecessaryDefer:"
-
-    # Exclude some linters from running on tests files.
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - dupl
-        - gosec
-
-    # Exclude known linters from partially hard-to-fix issues related to unsafe
-    # Removed typecheck linter reference as it's no longer a standalone linter
-
-    # Exclude unsafe usage warnings - we need them for performance optimization
-    - linters:
-        - gosec
-      text: "G103: Use of unsafe calls should be audited"
-
-
-    # Exclude some staticcheck messages
-    - linters:
-        - staticcheck
-      text: "SA9003:"
-
-    # Exclude lll issues for long lines in comments or strings
-    # - linters:
-    #     - lll
-    #   source: "^//go:"
-
-  # Independently from option `exclude` we use default exclude patterns,
-  # it can be disabled by this option. To list all
-  # excluded by default patterns execute `golangci-lint run --help`.
-  # Default value for this option is true.
-  exclude-use-default: false
-
   # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
   max-issues-per-linter: 0
 
   # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
   max-same-issues: 0
 
-  # Show only new issues: if there are unstaged changes or untracked files,
-  # only those changes are analyzed, else only changes in HEAD~ are analyzed.
-  # It's a super-useful option for integration of golangci-lint into existing
-  # large codebase. It's not practical to fix all existing issues at the moment
-  # of integration: much better don't allow issues in new code.
-  # Default is false.
   new: false
 
-  # Show only new issues created after git revision `REV`
-  # new-from-rev: REV
-
-  # Show only new issues created in git patch with set file path.
-  # new-from-patch: path/to/patch/file

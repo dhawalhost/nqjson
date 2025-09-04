@@ -860,45 +860,69 @@ func extractValueBoundsInFastFind(data []byte, pos int) (int, int) {
 
 // skipKeyValuePairInFastFind skips over the current key-value pair and positions at the next element
 func skipKeyValuePairInFastFind(data []byte, pos int) int {
-	// Skip the key
-	keyEnd := pos + 1
-	for keyEnd < len(data) && data[keyEnd] != '"' {
-		keyEnd++
-	}
-	if keyEnd >= len(data) {
-		return -1
-	}
-	keyEnd++ // Skip closing quote
-
-	// Skip to colon
-	for keyEnd < len(data) && data[keyEnd] <= ' ' {
-		keyEnd++
-	}
-	if keyEnd >= len(data) || data[keyEnd] != ':' {
-		return -1
-	}
-	keyEnd++ // Skip colon
-
-	// Skip whitespace to get to value
-	for keyEnd < len(data) && data[keyEnd] <= ' ' {
-		keyEnd++
-	}
-
-	// Now call findValueEnd on the actual value position
-	pos = findValueEnd(data, keyEnd)
-	if pos == -1 {
+	// Skip quoted key (pos should point at '"')
+	afterKey := fastSkipQuotedStringGet(data, pos)
+	if afterKey == -1 {
 		return -1
 	}
 
-	// Skip to next key or end
-	for ; pos < len(data) && data[pos] != ',' && data[pos] != '}'; pos++ {
+	// Skip spaces to colon and validate
+	afterSpaces := fastSkipSpacesGet(data, afterKey)
+	if afterSpaces >= len(data) || data[afterSpaces] != ':' {
+		return -1
+	}
+	// Move past ':' and spaces to the value start
+	valStart := fastSkipSpacesGet(data, afterSpaces+1)
+
+	// Find end of value
+	valEnd := findValueEnd(data, valStart)
+	if valEnd == -1 {
+		return -1
+	}
+
+	// Position to next pair, or -1 if end
+	return fastSkipToNextPairDividerGet(data, valEnd)
+}
+
+// fastSkipQuotedStringGet skips a JSON quoted string starting at pos (must be '"').
+// Returns index after closing quote or -1 on error.
+func fastSkipQuotedStringGet(data []byte, pos int) int {
+	if pos >= len(data) || data[pos] != '"' {
+		return -1
+	}
+	pos++
+	for pos < len(data) {
+		c := data[pos]
+		if c == '\\' { // escape
+			pos += 2
+			continue
+		}
+		if c == '"' {
+			return pos + 1
+		}
+		pos++
+	}
+	return -1
+}
+
+// fastSkipSpacesGet advances over ASCII spaces and returns new position.
+func fastSkipSpacesGet(data []byte, pos int) int {
+	for pos < len(data) && data[pos] <= ' ' {
+		pos++
+	}
+	return pos
+}
+
+// fastSkipToNextPairDividerGet moves from valueEnd to the next comma separating
+// pairs or returns -1 if end of object is reached.
+func fastSkipToNextPairDividerGet(data []byte, pos int) int {
+	for pos < len(data) && data[pos] != ',' && data[pos] != '}' {
+		pos++
 	}
 	if pos >= len(data) || data[pos] == '}' {
 		return -1
 	}
-	pos++ // skip comma
-
-	return pos
+	return pos + 1 // skip comma
 }
 
 // validateArrayAndGetStart validates input is array and returns starting position
@@ -1210,32 +1234,36 @@ func fastSkipArray(data []byte, start int) int {
 
 // fastSkipLiteral efficiently skips over a JSON literal (true, false, null)
 func fastSkipLiteral(data []byte, start int) int {
-	pos := start
-	switch data[pos] {
-	case 't': // true
-		if pos+3 < len(data) &&
-			data[pos+1] == 'r' &&
-			data[pos+2] == 'u' &&
-			data[pos+3] == 'e' {
-			return pos + 4
-		}
-	case 'f': // false
-		if pos+4 < len(data) &&
-			data[pos+1] == 'a' &&
-			data[pos+2] == 'l' &&
-			data[pos+3] == 's' &&
-			data[pos+4] == 'e' {
-			return pos + 5
-		}
-	case 'n': // null
-		if pos+3 < len(data) &&
-			data[pos+1] == 'u' &&
-			data[pos+2] == 'l' &&
-			data[pos+3] == 'l' {
-			return pos + 4
+	if start >= len(data) {
+		return -1
+	}
+	switch data[start] {
+	case 't':
+		return matchLiteralAt(data, start, "true")
+	case 'f':
+		return matchLiteralAt(data, start, "false")
+	case 'n':
+		return matchLiteralAt(data, start, "null")
+	default:
+		return -1
+	}
+}
+
+// matchLiteralAt verifies that data at pos matches the ASCII literal and returns
+// the index immediately after the literal or -1 if it doesn't match.
+func matchLiteralAt(data []byte, pos int, lit string) int {
+	// Fast bounds check
+	l := len(lit)
+	if pos+l > len(data) {
+		return -1
+	}
+	// Compare bytes
+	for i := 0; i < l; i++ {
+		if data[pos+i] != lit[i] {
+			return -1
 		}
 	}
-	return -1
+	return pos + l
 }
 
 // fastSkipNumber efficiently skips over a JSON number
@@ -3154,67 +3182,86 @@ func forEachArrayRaw(raw []byte, pos int, iterator func(key, value Result) bool)
 // forEachObjectRaw iterates over object key/value pairs starting at pos
 func forEachObjectRaw(raw []byte, pos int, iterator func(key, value Result) bool) {
 	for pos < len(raw) {
-		// Skip whitespace and find key
-		for ; pos < len(raw) && raw[pos] <= ' '; pos++ {
-		}
-		if pos >= len(raw) || raw[pos] == '}' {
+		// Move to the next entry start or end of object
+		nextPos, end := advanceToNextObjectEntry(raw, pos)
+		if end {
 			break
 		}
-		if raw[pos] != '"' {
-			break // Invalid object
+		if nextPos < 0 {
+			break // invalid object
 		}
 
-		keyStart := pos
-		keyRes := parseString(raw, keyStart)
-		if !keyRes.Exists() {
-			break
-		}
-		pos = keyStart + len(keyRes.Raw)
-
-		// Find colon
-		for ; pos < len(raw) && raw[pos] != ':'; pos++ {
-		}
-
-		if pos >= len(raw) {
+		// Parse key and find value start
+		keyRes, valueStart := parseObjectKeyAt(raw, nextPos)
+		if valueStart < 0 {
 			break
 		}
 
-		// Skip colon and whitespace
-		pos++
-		for ; pos < len(raw) && raw[pos] <= ' '; pos++ {
-		}
-
-		if pos >= len(raw) {
-			break
-		}
-
-		// Find value
-		valueStart := pos
-		valueEnd := findValueEnd(raw, pos)
-
+		// Compute value end
+		valueEnd := findValueEnd(raw, valueStart)
 		if valueEnd == -1 {
 			break
 		}
 
-		// Parse value
+		// Parse and yield
 		value := parseAny(raw[valueStart:valueEnd])
 		value.Raw = raw[valueStart:valueEnd]
-
 		if !iterator(keyRes, value) {
 			return
 		}
 
-		// Move to next pair
-		pos = valueEnd
-
-		// Skip to comma or end
-		for ; pos < len(raw) && (raw[pos] <= ' ' || raw[pos] == ','); pos++ {
-			if raw[pos] == ',' {
-				pos++
-				break
-			}
-		}
+		// Move after optional comma for next iteration
+		pos = skipSpacesAndOptionalComma(raw, valueEnd)
 	}
+}
+
+// advanceToNextObjectEntry skips spaces and returns the position of the next '"' key
+// or indicates the end of the object.
+func advanceToNextObjectEntry(raw []byte, pos int) (int, bool) {
+	pos = fastSkipSpacesGet(raw, pos)
+	if pos >= len(raw) || raw[pos] == '}' {
+		return pos, true
+	}
+	if raw[pos] != '"' { // invalid object structure
+		return -1, false
+	}
+	return pos, false
+}
+
+// parseObjectKeyAt parses a string key starting at 'pos' and positions to the value start.
+func parseObjectKeyAt(raw []byte, pos int) (Result, int) {
+	keyRes := parseString(raw, pos)
+	if !keyRes.Exists() {
+		return Result{}, -1
+	}
+	pos = pos + len(keyRes.Raw)
+	// Find colon
+	for pos < len(raw) && raw[pos] != ':' {
+		pos++
+	}
+	if pos >= len(raw) {
+		return Result{}, -1
+	}
+	// Skip colon and whitespace to value start
+	pos++
+	pos = fastSkipSpacesGet(raw, pos)
+	if pos >= len(raw) {
+		return Result{}, -1
+	}
+	return keyRes, pos
+}
+
+// skipSpacesAndOptionalComma advances over whitespace and a single optional comma.
+func skipSpacesAndOptionalComma(raw []byte, pos int) int {
+	// Skip spaces and at most one comma
+	for pos < len(raw) && (raw[pos] <= ' ' || raw[pos] == ',') {
+		if raw[pos] == ',' {
+			pos++
+			break
+		}
+		pos++
+	}
+	return pos
 }
 
 // Get returns a value from an object or array
