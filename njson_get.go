@@ -315,28 +315,8 @@ func getUltraSimplePath(data []byte, path string) Result {
 		return Result{Type: TypeUndefined}
 	}
 
-	// Manual search optimized for small data
-	var keyIdx = -1
-	for i := 0; i <= len(data)-searchLen; i++ {
-		if data[i] == '"' {
-			// Check if the key matches
-			if i+keyLen+2 < len(data) && data[i+keyLen+1] == '"' && data[i+keyLen+2] == ':' {
-				// Compare the key bytes directly
-				match := true
-				for j := 0; j < keyLen; j++ {
-					if data[i+1+j] != path[j] {
-						match = false
-						break
-					}
-				}
-				if match {
-					keyIdx = i
-					break
-				}
-			}
-		}
-	}
-
+	// Find the key in the JSON
+	keyIdx := findKeyInJSON(data, path, keyLen, searchLen)
 	if keyIdx == -1 {
 		return Result{Type: TypeUndefined}
 	}
@@ -354,101 +334,161 @@ func getUltraSimplePath(data []byte, path string) Result {
 	}
 
 	// Parse value based on first character - optimized for common cases
+	return parseValueAtPosition(data, valueStart)
+}
+
+// findKeyInJSON searches for a key in JSON data and returns its index
+func findKeyInJSON(data []byte, path string, keyLen, searchLen int) int {
+	for i := 0; i <= len(data)-searchLen; i++ {
+		if data[i] == '"' {
+			// Check if the key matches
+			if i+keyLen+2 < len(data) && data[i+keyLen+1] == '"' && data[i+keyLen+2] == ':' {
+				// Compare the key bytes directly
+				match := true
+				for j := 0; j < keyLen; j++ {
+					if data[i+1+j] != path[j] {
+						match = false
+						break
+					}
+				}
+				if match {
+					return i
+				}
+			}
+		}
+	}
+	return -1
+}
+
+// parseValueAtPosition parses a JSON value at the given position
+func parseValueAtPosition(data []byte, valueStart int) Result {
 	switch data[valueStart] {
 	case '"': // String - most common case first, optimized for ultra-simple path
-		if valueStart >= len(data) {
-			return Result{Type: TypeUndefined}
-		}
-
-		end := valueStart + 1
-		for ; end < len(data); end++ {
-			if data[end] == '\\' {
-				end++ // Skip escape character
-				continue
-			}
-			if data[end] == '"' {
-				break
-			}
-		}
-
-		if end >= len(data) {
-			return Result{Type: TypeUndefined}
-		}
-
-		// Extract the string content (without quotes)
-		raw := data[valueStart : end+1]
-		str := raw[1 : len(raw)-1] // Remove quotes
-
-		// For ultra-simple path, use zero-allocation string conversion
-		// This is safe because we're not modifying the underlying data
-		return Result{
-			Type:  TypeString,
-			Str:   bytesToString(str),
-			Raw:   raw,
-			Index: valueStart,
-		}
+		return parseStringValue(data, valueStart)
 	case 't': // true
-		if valueStart+3 < len(data) &&
-			data[valueStart+1] == 'r' &&
-			data[valueStart+2] == 'u' &&
-			data[valueStart+3] == 'e' {
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: true,
-				Raw:     data[valueStart : valueStart+4],
-				Index:   valueStart,
-			}
-		}
+		return parseTrueValue(data, valueStart)
 	case 'f': // false
-		if valueStart+4 < len(data) &&
-			data[valueStart+1] == 'a' &&
-			data[valueStart+2] == 'l' &&
-			data[valueStart+3] == 's' &&
-			data[valueStart+4] == 'e' {
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: false,
-				Raw:     data[valueStart : valueStart+5],
-				Index:   valueStart,
-			}
-		}
+		return parseFalseValue(data, valueStart)
 	case 'n': // null
-		if valueStart+3 < len(data) &&
-			data[valueStart+1] == 'u' &&
-			data[valueStart+2] == 'l' &&
-			data[valueStart+3] == 'l' {
-			return Result{
-				Type:  TypeNull,
-				Raw:   data[valueStart : valueStart+4],
-				Index: valueStart,
-			}
-		}
+		return parseNullValue(data, valueStart)
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		// Number
 		return parseNumber(data, valueStart)
 	case '{': // Object
-		objectEnd := findBlockEnd(data, valueStart, '{', '}')
-		if objectEnd == -1 {
-			return Result{Type: TypeUndefined}
-		}
-		return Result{
-			Type:  TypeObject,
-			Raw:   data[valueStart:objectEnd],
-			Index: valueStart,
-		}
+		return parseObjectValue(data, valueStart)
 	case '[': // Array
-		arrayEnd := findBlockEnd(data, valueStart, '[', ']')
-		if arrayEnd == -1 {
-			return Result{Type: TypeUndefined}
+		return parseArrayValue(data, valueStart)
+	}
+	return Result{Type: TypeUndefined}
+}
+
+// parseStringValue parses a JSON string value
+func parseStringValue(data []byte, valueStart int) Result {
+	if valueStart >= len(data) {
+		return Result{Type: TypeUndefined}
+	}
+
+	end := valueStart + 1
+	for ; end < len(data); end++ {
+		if data[end] == '\\' {
+			end++ // Skip escape character
+			continue
 		}
-		return Result{
-			Type:  TypeArray,
-			Raw:   data[valueStart:arrayEnd],
-			Index: valueStart,
+		if data[end] == '"' {
+			break
 		}
 	}
 
+	if end >= len(data) {
+		return Result{Type: TypeUndefined}
+	}
+
+	// Extract the string content (without quotes)
+	raw := data[valueStart : end+1]
+	str := raw[1 : len(raw)-1] // Remove quotes
+
+	// For ultra-simple path, use zero-allocation string conversion
+	// This is safe because we're not modifying the underlying data
+	return Result{
+		Type:  TypeString,
+		Str:   bytesToString(str),
+		Raw:   raw,
+		Index: valueStart,
+	}
+}
+
+// parseTrueValue parses a JSON true value
+func parseTrueValue(data []byte, valueStart int) Result {
+	if valueStart+3 < len(data) &&
+		data[valueStart+1] == 'r' &&
+		data[valueStart+2] == 'u' &&
+		data[valueStart+3] == 'e' {
+		return Result{
+			Type:    TypeBoolean,
+			Boolean: true,
+			Raw:     data[valueStart : valueStart+4],
+			Index:   valueStart,
+		}
+	}
 	return Result{Type: TypeUndefined}
+}
+
+// parseFalseValue parses a JSON false value
+func parseFalseValue(data []byte, valueStart int) Result {
+	if valueStart+4 < len(data) &&
+		data[valueStart+1] == 'a' &&
+		data[valueStart+2] == 'l' &&
+		data[valueStart+3] == 's' &&
+		data[valueStart+4] == 'e' {
+		return Result{
+			Type:    TypeBoolean,
+			Boolean: false,
+			Raw:     data[valueStart : valueStart+5],
+			Index:   valueStart,
+		}
+	}
+	return Result{Type: TypeUndefined}
+}
+
+// parseNullValue parses a JSON null value
+func parseNullValue(data []byte, valueStart int) Result {
+	if valueStart+3 < len(data) &&
+		data[valueStart+1] == 'u' &&
+		data[valueStart+2] == 'l' &&
+		data[valueStart+3] == 'l' {
+		return Result{
+			Type:  TypeNull,
+			Raw:   data[valueStart : valueStart+4],
+			Index: valueStart,
+		}
+	}
+	return Result{Type: TypeUndefined}
+}
+
+// parseObjectValue parses a JSON object value
+func parseObjectValue(data []byte, valueStart int) Result {
+	objectEnd := findBlockEnd(data, valueStart, '{', '}')
+	if objectEnd == -1 {
+		return Result{Type: TypeUndefined}
+	}
+	return Result{
+		Type:  TypeObject,
+		Raw:   data[valueStart:objectEnd],
+		Index: valueStart,
+	}
+}
+
+// parseArrayValue parses a JSON array value
+func parseArrayValue(data []byte, valueStart int) Result {
+	arrayEnd := findBlockEnd(data, valueStart, '[', ']')
+	if arrayEnd == -1 {
+		return Result{Type: TypeUndefined}
+	}
+	return Result{
+		Type:  TypeArray,
+		Raw:   data[valueStart:arrayEnd],
+		Index: valueStart,
+	}
 }
 
 // getSimplePath handles simple dot notation and basic array access
@@ -457,6 +497,31 @@ func getSimplePath(data []byte, path string) Result {
 	dataStart, dataEnd := 0, len(data)
 	p := 0
 
+	// Handle direct array index at start of path
+	if newP, newStart, newEnd := handleGetDirectArrayIndex(data, path, p, dataStart, dataEnd); newP != p {
+		p, dataStart, dataEnd = newP, newStart, newEnd
+	}
+
+	// Process path segments
+	for p < len(path) {
+		var newP int
+		var newStart, newEnd int
+		var err error
+
+		newP, newStart, newEnd, err = processGetPathSegment(data, path, p, dataStart, dataEnd)
+		if err != nil {
+			return Result{Type: TypeUndefined}
+		}
+
+		p, dataStart, dataEnd = newP, newStart, newEnd
+	}
+
+	// Direct parsing of final value
+	return fastParseValue(data[dataStart:dataEnd])
+}
+
+// handleGetDirectArrayIndex handles paths that start with a numeric array index
+func handleGetDirectArrayIndex(data []byte, path string, p, dataStart, dataEnd int) (int, int, int) {
 	// Special case: if the path starts with a number (direct array index)
 	if p < len(path) && path[p] >= '0' && path[p] <= '9' {
 		// Parse the array index
@@ -469,7 +534,7 @@ func getSimplePath(data []byte, path string) Result {
 		// Use simple array access for better performance on medium data
 		start, end := fastFindArrayElement(data, idx)
 		if start == -1 {
-			return Result{Type: TypeUndefined}
+			return p, -1, -1 // Signal error
 		}
 		dataStart = start
 		dataEnd = end
@@ -479,79 +544,97 @@ func getSimplePath(data []byte, path string) Result {
 			p++ // Skip the dot
 		}
 	}
+	return p, dataStart, dataEnd
+}
 
-	for p < len(path) {
-		keyStart := p
+// processGetPathSegment processes a single segment of the path
+func processGetPathSegment(data []byte, path string, p, dataStart, dataEnd int) (int, int, int, error) {
+	keyStart := p
 
-		// Find end of key part
-		i := p
-		for i < len(path) && path[i] != '.' && path[i] != '[' {
-			i++
-		}
+	// Find end of key part
+	i := p
+	for i < len(path) && path[i] != '.' && path[i] != '[' {
+		i++
+	}
 
-		key := path[keyStart:i]
-		p = i
+	key := path[keyStart:i]
+	p = i
 
-		if key != "" {
-			// Check if current data is an array and the key is numeric
-			if dataEnd > dataStart && data[dataStart] == '[' && isNumericKey(key) {
-				// Treat as array index access using dot notation
-				idx := 0
-				for j := 0; j < len(key); j++ {
-					idx = idx*10 + int(key[j]-'0')
-				}
-
-				// Use simple array access - ultra-fast approach has bugs
-				start, end := fastFindArrayElement(data[dataStart:dataEnd], idx)
-				if start == -1 {
-					return Result{Type: TypeUndefined}
-				}
-				dataStart += start
-				dataEnd = dataStart + (end - start)
-			} else {
-				// Normal object key access - optimized for medium JSON
-				start, end := fastFindObjectValue(data[dataStart:dataEnd], key)
-				if start == -1 {
-					return Result{Type: TypeUndefined}
-				}
-				dataStart += start
-				dataEnd = dataStart + (end - start)
-			}
-		}
-
-		// Check for array access with bracket notation
-		if p < len(path) && path[p] == '[' {
-			p++ // Skip '['
-
-			// Fast manual integer parsing instead of strconv.Atoi
-			idx := 0
-			for p < len(path) && path[p] >= '0' && path[p] <= '9' {
-				idx = idx*10 + int(path[p]-'0')
-				p++
-			}
-
-			if p >= len(path) || path[p] != ']' {
-				return Result{Type: TypeUndefined} // Malformed
-			}
-			p++ // Skip ']'
-
-			// Use simple array access for bracket notation (typically smaller indices)
-			start, end := fastFindArrayElement(data[dataStart:dataEnd], idx)
-			if start == -1 {
-				return Result{Type: TypeUndefined}
-			}
-			dataStart += start
-			dataEnd = dataStart + (end - start)
-		}
-
-		// Move to next part
-		if p < len(path) && path[p] == '.' {
-			p++
+	// Process key if not empty
+	if key != "" {
+		var err error
+		dataStart, dataEnd, err = processGetKeyAccess(data, key, dataStart, dataEnd)
+		if err != nil {
+			return p, dataStart, dataEnd, err
 		}
 	}
 
-	// Direct parsing of final value
-	return fastParseValue(data[dataStart:dataEnd])
+	// Handle bracket notation array access
+	if p < len(path) && path[p] == '[' {
+		var err error
+		p, dataStart, dataEnd, err = processGetBracketAccess(data, path, p, dataStart, dataEnd)
+		if err != nil {
+			return p, dataStart, dataEnd, err
+		}
+	}
+
+	// Move to next part
+	if p < len(path) && path[p] == '.' {
+		p++
+	}
+
+	return p, dataStart, dataEnd, nil
+}
+
+// processGetKeyAccess handles object key access or numeric array index access
+func processGetKeyAccess(data []byte, key string, dataStart, dataEnd int) (int, int, error) {
+	// Check if current data is an array and the key is numeric
+	if dataEnd > dataStart && data[dataStart] == '[' && isNumericKey(key) {
+		// Treat as array index access using dot notation
+		idx := 0
+		for j := 0; j < len(key); j++ {
+			idx = idx*10 + int(key[j]-'0')
+		}
+
+		// Use simple array access - ultra-fast approach has bugs
+		start, end := fastFindArrayElement(data[dataStart:dataEnd], idx)
+		if start == -1 {
+			return dataStart, dataEnd, fmt.Errorf("array index not found")
+		}
+		return dataStart + start, dataStart + start + (end - start), nil
+	} else {
+		// Normal object key access - optimized for medium JSON
+		start, end := fastFindObjectValue(data[dataStart:dataEnd], key)
+		if start == -1 {
+			return dataStart, dataEnd, fmt.Errorf("object key not found")
+		}
+		return dataStart + start, dataStart + start + (end - start), nil
+	}
+}
+
+// processGetBracketAccess handles bracket notation array access like [0]
+func processGetBracketAccess(data []byte, path string, p, dataStart, dataEnd int) (int, int, int, error) {
+	p++ // Skip '['
+
+	// Fast manual integer parsing instead of strconv.Atoi
+	idx := 0
+	for p < len(path) && path[p] >= '0' && path[p] <= '9' {
+		idx = idx*10 + int(path[p]-'0')
+		p++
+	}
+
+	if p >= len(path) || path[p] != ']' {
+		return p, dataStart, dataEnd, fmt.Errorf("malformed bracket notation")
+	}
+	p++ // Skip ']'
+
+	// Use simple array access for bracket notation (typically smaller indices)
+	start, end := fastFindArrayElement(data[dataStart:dataEnd], idx)
+	if start == -1 {
+		return p, dataStart, dataEnd, fmt.Errorf("array index not found")
+	}
+
+	return p, dataStart + start, dataStart + start + (end - start), nil
 }
 
 // skipStringValue skips over a JSON string value efficiently
@@ -674,14 +757,9 @@ func isNumericKey(key string) bool {
 
 // fastFindObjectValue finds a key's value in an object, optimized for performance
 func fastFindObjectValue(data []byte, key string) (int, int) {
-	// Skip whitespace
-	start := 0
-	for ; start < len(data); start++ {
-		if data[start] > ' ' {
-			break
-		}
-	}
-	if start >= len(data) || data[start] != '{' {
+	// Skip whitespace and validate object start
+	start := findObjectStartForFastFind(data)
+	if start == -1 {
 		return -1, -1
 	}
 
@@ -689,90 +767,138 @@ func fastFindObjectValue(data []byte, key string) (int, int) {
 	keyLen := len(key)
 
 	for pos < len(data) {
-		// Skip whitespace
-		for ; pos < len(data) && data[pos] <= ' '; pos++ {
-		}
-		if pos >= len(data) || data[pos] == '}' {
-			return -1, -1
-		}
-
-		if data[pos] != '"' {
-			return -1, -1
-		}
-
-		// Check if this key matches
-		if pos+keyLen+1 < len(data) && data[pos+keyLen+1] == '"' {
-			match := true
-			for i := 0; i < keyLen; i++ {
-				if data[pos+1+i] != key[i] {
-					match = false
-					break
-				}
-			}
-
-			if match {
-				// Found our key, skip to colon
-				pos += keyLen + 2 // skip "key"
-				for ; pos < len(data) && data[pos] <= ' '; pos++ {
-				}
-				if pos >= len(data) || data[pos] != ':' {
-					return -1, -1
-				}
-				pos++ // skip ':'
-				for ; pos < len(data) && data[pos] <= ' '; pos++ {
-				}
-
-				// Find value end
-				valueStart := pos
-				valueEnd := findValueEnd(data, pos)
-				if valueEnd == -1 {
-					return -1, -1
-				}
-				return valueStart, valueEnd
-			}
-		}
-
-		// Skip this key-value pair
-		// First, skip the key
-		keyEnd := pos + 1
-		for keyEnd < len(data) && data[keyEnd] != '"' {
-			keyEnd++
-		}
-		if keyEnd >= len(data) {
-			return -1, -1
-		}
-		keyEnd++ // Skip closing quote
-
-		// Skip to colon
-		for keyEnd < len(data) && data[keyEnd] <= ' ' {
-			keyEnd++
-		}
-		if keyEnd >= len(data) || data[keyEnd] != ':' {
-			return -1, -1
-		}
-		keyEnd++ // Skip colon
-
-		// Skip whitespace to get to value
-		for keyEnd < len(data) && data[keyEnd] <= ' ' {
-			keyEnd++
-		}
-
-		// Now call findValueEnd on the actual value position
-		pos = findValueEnd(data, keyEnd)
+		// Skip to next key or detect end of object
+		pos = skipToNextKeyInFastFind(data, pos)
 		if pos == -1 {
 			return -1, -1
 		}
 
-		// Skip to next key or end
-		for ; pos < len(data) && data[pos] != ',' && data[pos] != '}'; pos++ {
+		// Check if this key matches our target
+		if valueStart, valueEnd := checkKeyMatchInFastFind(data, pos, key, keyLen); valueStart != -1 {
+			return valueStart, valueEnd
 		}
-		if pos >= len(data) || data[pos] == '}' {
+
+		// Skip this key-value pair and continue
+		pos = skipKeyValuePairInFastFind(data, pos)
+		if pos == -1 {
 			return -1, -1
 		}
-		pos++ // skip comma
 	}
 
 	return -1, -1
+}
+
+// findObjectStartForFastFind finds the starting position of the JSON object
+func findObjectStartForFastFind(data []byte) int {
+	start := 0
+	for ; start < len(data); start++ {
+		if data[start] > ' ' {
+			break
+		}
+	}
+	if start >= len(data) || data[start] != '{' {
+		return -1
+	}
+	return start
+}
+
+// skipToNextKeyInFastFind advances to the next key in the object or returns -1 if end reached
+func skipToNextKeyInFastFind(data []byte, pos int) int {
+	// Skip whitespace
+	for ; pos < len(data) && data[pos] <= ' '; pos++ {
+	}
+	if pos >= len(data) || data[pos] == '}' {
+		return -1
+	}
+
+	if data[pos] != '"' {
+		return -1
+	}
+
+	return pos
+}
+
+// checkKeyMatchInFastFind checks if the current key matches our target and returns value bounds if so
+func checkKeyMatchInFastFind(data []byte, pos int, key string, keyLen int) (int, int) {
+	// Check if this key matches
+	if pos+keyLen+1 < len(data) && data[pos+keyLen+1] == '"' {
+		match := true
+		for i := 0; i < keyLen; i++ {
+			if data[pos+1+i] != key[i] {
+				match = false
+				break
+			}
+		}
+
+		if match {
+			return extractValueBoundsInFastFind(data, pos+keyLen+2)
+		}
+	}
+	return -1, -1
+}
+
+// extractValueBoundsInFastFind finds the start and end positions of the value after a matched key
+func extractValueBoundsInFastFind(data []byte, pos int) (int, int) {
+	// Skip to colon
+	for ; pos < len(data) && data[pos] <= ' '; pos++ {
+	}
+	if pos >= len(data) || data[pos] != ':' {
+		return -1, -1
+	}
+	pos++ // skip ':'
+	for ; pos < len(data) && data[pos] <= ' '; pos++ {
+	}
+
+	// Find value end
+	valueStart := pos
+	valueEnd := findValueEnd(data, pos)
+	if valueEnd == -1 {
+		return -1, -1
+	}
+	return valueStart, valueEnd
+}
+
+// skipKeyValuePairInFastFind skips over the current key-value pair and positions at the next element
+func skipKeyValuePairInFastFind(data []byte, pos int) int {
+	// Skip the key
+	keyEnd := pos + 1
+	for keyEnd < len(data) && data[keyEnd] != '"' {
+		keyEnd++
+	}
+	if keyEnd >= len(data) {
+		return -1
+	}
+	keyEnd++ // Skip closing quote
+
+	// Skip to colon
+	for keyEnd < len(data) && data[keyEnd] <= ' ' {
+		keyEnd++
+	}
+	if keyEnd >= len(data) || data[keyEnd] != ':' {
+		return -1
+	}
+	keyEnd++ // Skip colon
+
+	// Skip whitespace to get to value
+	for keyEnd < len(data) && data[keyEnd] <= ' ' {
+		keyEnd++
+	}
+
+	// Now call findValueEnd on the actual value position
+	pos = findValueEnd(data, keyEnd)
+	if pos == -1 {
+		return -1
+	}
+
+	// Skip to next key or end
+	for ; pos < len(data) && data[pos] != ',' && data[pos] != '}'; pos++ {
+	}
+	if pos >= len(data) || data[pos] == '}' {
+		return -1
+	}
+	pos++ // skip comma
+
+	return pos
 }
 
 // validateArrayAndGetStart validates input is array and returns starting position
@@ -1009,6 +1135,122 @@ func optimizedCommaScanning(data []byte, targetIndex int) (int, int) {
 	return -1, -1
 }
 
+// fastSkipString efficiently skips over a JSON string
+func fastSkipString(data []byte, start int) int {
+	pos := start + 1 // Skip opening quote
+	for pos < len(data) {
+		if data[pos] == '\\' {
+			pos += 2 // Skip escaped character
+			continue
+		}
+		if data[pos] == '"' {
+			pos++ // Skip closing quote
+			break
+		}
+		pos++
+	}
+	return pos
+}
+
+// fastSkipObject efficiently skips over a JSON object
+func fastSkipObject(data []byte, start int) int {
+	pos := start + 1 // Skip opening brace
+	depth := 1
+	inString := false
+	for pos < len(data) && depth > 0 {
+		if !inString {
+			switch data[pos] {
+			case '"':
+				inString = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+		} else {
+			switch data[pos] {
+			case '\\':
+				pos++ // Skip escaped character
+			case '"':
+				inString = false
+			}
+		}
+		pos++
+	}
+	return pos
+}
+
+// fastSkipArray efficiently skips over a JSON array
+func fastSkipArray(data []byte, start int) int {
+	pos := start + 1 // Skip opening bracket
+	depth := 1
+	inString := false
+	for pos < len(data) && depth > 0 {
+		if !inString {
+			switch data[pos] {
+			case '"':
+				inString = true
+			case '[':
+				depth++
+			case ']':
+				depth--
+			}
+		} else {
+			switch data[pos] {
+			case '\\':
+				pos++ // Skip escaped character
+			case '"':
+				inString = false
+			}
+		}
+		pos++
+	}
+	return pos
+}
+
+// fastSkipLiteral efficiently skips over a JSON literal (true, false, null)
+func fastSkipLiteral(data []byte, start int) int {
+	pos := start
+	switch data[pos] {
+	case 't': // true
+		if pos+3 < len(data) &&
+			data[pos+1] == 'r' &&
+			data[pos+2] == 'u' &&
+			data[pos+3] == 'e' {
+			return pos + 4
+		}
+	case 'f': // false
+		if pos+4 < len(data) &&
+			data[pos+1] == 'a' &&
+			data[pos+2] == 'l' &&
+			data[pos+3] == 's' &&
+			data[pos+4] == 'e' {
+			return pos + 5
+		}
+	case 'n': // null
+		if pos+3 < len(data) &&
+			data[pos+1] == 'u' &&
+			data[pos+2] == 'l' &&
+			data[pos+3] == 'l' {
+			return pos + 4
+		}
+	}
+	return -1
+}
+
+// fastSkipNumber efficiently skips over a JSON number
+func fastSkipNumber(data []byte, start int) int {
+	pos := start
+	for pos < len(data) {
+		c := data[pos]
+		if (c < '0' || c > '9') && c != '.' && c != 'e' && c != 'E' && c != '+' && c != '-' {
+			break
+		}
+		pos++
+	}
+	return pos
+}
+
 // fastSkipValue efficiently skips over a JSON value using minimal parsing
 func fastSkipValue(data []byte, start int) int {
 	pos := start
@@ -1019,109 +1261,15 @@ func fastSkipValue(data []byte, start int) int {
 
 	switch data[pos] {
 	case '"': // String
-		pos++ // Skip opening quote
-		for pos < len(data) {
-			if data[pos] == '\\' {
-				pos += 2 // Skip escaped character
-				continue
-			}
-			if data[pos] == '"' {
-				pos++ // Skip closing quote
-				break
-			}
-			pos++
-		}
-		return pos
-
+		return fastSkipString(data, pos)
 	case '{': // Object
-		pos++ // Skip opening brace
-		depth := 1
-		inString := false
-		for pos < len(data) && depth > 0 {
-			if !inString {
-				switch data[pos] {
-				case '"':
-					inString = true
-				case '{':
-					depth++
-				case '}':
-					depth--
-				}
-			} else {
-				switch data[pos] {
-				case '\\':
-					pos++ // Skip escaped character
-				case '"':
-					inString = false
-				}
-			}
-			pos++
-		}
-		return pos
-
+		return fastSkipObject(data, pos)
 	case '[': // Array
-		pos++ // Skip opening bracket
-		depth := 1
-		inString := false
-		for pos < len(data) && depth > 0 {
-			if !inString {
-				switch data[pos] {
-				case '"':
-					inString = true
-				case '[':
-					depth++
-				case ']':
-					depth--
-				}
-			} else {
-				switch data[pos] {
-				case '\\':
-					pos++ // Skip escaped character
-				case '"':
-					inString = false
-				}
-			}
-			pos++
-		}
-		return pos
-
-	case 't': // true
-		if pos+3 < len(data) &&
-			data[pos+1] == 'r' &&
-			data[pos+2] == 'u' &&
-			data[pos+3] == 'e' {
-			return pos + 4
-		}
-		return -1
-
-	case 'f': // false
-		if pos+4 < len(data) &&
-			data[pos+1] == 'a' &&
-			data[pos+2] == 'l' &&
-			data[pos+3] == 's' &&
-			data[pos+4] == 'e' {
-			return pos + 5
-		}
-		return -1
-
-	case 'n': // null
-		if pos+3 < len(data) &&
-			data[pos+1] == 'u' &&
-			data[pos+2] == 'l' &&
-			data[pos+3] == 'l' {
-			return pos + 4
-		}
-		return -1
-
+		return fastSkipArray(data, pos)
+	case 't', 'f', 'n': // true, false, null
+		return fastSkipLiteral(data, pos)
 	default: // Number
-		for pos < len(data) {
-			c := data[pos]
-			if !((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
-				break
-			}
-			pos++
-		}
-		return pos
+		return fastSkipNumber(data, pos)
 	}
 }
 
@@ -1344,7 +1492,7 @@ func parseFilterExpression(expr string) *filterExpr {
 
 	// Find the operator
 	var op string
-	var opIdx int = -1
+	opIdx := -1
 
 	// Check for various operators
 	for _, operator := range []string{"==", "!=", ">=", "<=", ">", "<", "=~"} {
@@ -1391,6 +1539,31 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 	current := Parse(data)
 
 	// Filter out modifier tokens
+	modifiers, pathTokens := separateModifierTokens(tokens)
+
+	// Process each token
+	for i, token := range pathTokens {
+		result, shouldReturn := processPathToken(current, token, pathTokens, i)
+		if shouldReturn {
+			return result
+		}
+		current = result
+
+		if !current.Exists() {
+			return Result{Type: TypeUndefined}
+		}
+	}
+
+	// Apply modifiers if any
+	if len(modifiers) > 0 {
+		current = applyModifiersToResult(current, modifiers)
+	}
+
+	return current
+}
+
+// separateModifierTokens separates modifier tokens from path tokens
+func separateModifierTokens(tokens []pathToken) ([]pathToken, []pathToken) {
 	var modifiers []pathToken
 	var pathTokens []pathToken
 
@@ -1402,185 +1575,217 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 		}
 	}
 
-	// Process each token
-	for i, token := range pathTokens {
-		switch token.kind {
-		case tokenKey:
-			if current.Type != TypeObject {
-				return Result{Type: TypeUndefined}
-			}
+	return modifiers, pathTokens
+}
 
-			// Use direct object lookup instead of ForEach to avoid allocations
-			start, end := fastFindObjectValue(current.Raw, token.str)
-			if start == -1 {
-				return Result{Type: TypeUndefined}
-			}
+// processPathToken processes a single path token and returns the result and whether to return early
+func processPathToken(current Result, token pathToken, pathTokens []pathToken, i int) (Result, bool) {
+	switch token.kind {
+	case tokenKey:
+		return processKeyToken(current, token)
+	case tokenIndex:
+		return processIndexToken(current, token)
+	case tokenWildcard:
+		return processWildcardToken(current, token, pathTokens, i)
+	case tokenFilter:
+		return processFilterToken(current, token)
+	case tokenRecursive:
+		return processRecursiveToken(current, pathTokens, i)
+	default:
+		return Result{Type: TypeUndefined}, true
+	}
+}
 
-			current = fastParseValue(current.Raw[start:end])
+// processKeyToken handles object key access
+func processKeyToken(current Result, token pathToken) (Result, bool) {
+	if current.Type != TypeObject {
+		return Result{Type: TypeUndefined}, true
+	}
 
-		case tokenIndex:
-			if current.Type != TypeArray {
-				return Result{Type: TypeUndefined}
-			}
+	// Use direct object lookup instead of ForEach to avoid allocations
+	start, end := fastFindObjectValue(current.Raw, token.str)
+	if start == -1 {
+		return Result{Type: TypeUndefined}, true
+	}
 
-			// Use direct array lookup instead of Array() to avoid allocations
-			start, end := fastFindArrayElement(current.Raw, token.num)
-			if start == -1 {
-				return Result{Type: TypeUndefined}
-			}
+	return fastParseValue(current.Raw[start:end]), false
+}
 
-			current = fastParseValue(current.Raw[start:end])
+// processIndexToken handles array index access
+func processIndexToken(current Result, token pathToken) (Result, bool) {
+	if current.Type != TypeArray {
+		return Result{Type: TypeUndefined}, true
+	}
 
-		case tokenWildcard:
-			if current.Type != TypeArray && current.Type != TypeObject {
-				return Result{Type: TypeUndefined}
-			}
+	// Use direct array lookup instead of Array() to avoid allocations
+	start, end := fastFindArrayElement(current.Raw, token.num)
+	if start == -1 {
+		return Result{Type: TypeUndefined}, true
+	}
 
-			// Fast path for simple wildcard operations like "phones.*.type"
-			if i == len(pathTokens)-2 && len(pathTokens) > 2 {
-				nextToken := pathTokens[i+1]
-				if nextToken.kind == tokenKey {
-					return fastWildcardKeyAccess(current, nextToken.str)
-				}
-			}
+	return fastParseValue(current.Raw[start:end]), false
+}
 
-			// Collect all values with minimal allocations
-			values := make([]Result, 0, 8) // Pre-allocate for common case
-			current.ForEach(func(_, value Result) bool {
-				values = append(values, value)
-				return true
-			})
+// processWildcardToken handles wildcard access
+func processWildcardToken(current Result, token pathToken, pathTokens []pathToken, i int) (Result, bool) {
+	if current.Type != TypeArray && current.Type != TypeObject {
+		return Result{Type: TypeUndefined}, true
+	}
 
-			if len(values) == 0 {
-				return Result{Type: TypeUndefined}
-			}
+	// Fast path for simple wildcard operations like "phones.*.type"
+	if i == len(pathTokens)-2 && len(pathTokens) > 2 {
+		nextToken := pathTokens[i+1]
+		if nextToken.kind == tokenKey {
+			return fastWildcardKeyAccess(current, nextToken.str), true
+		}
+	}
 
-			// If this is the last token, return array of values
-			if i == len(pathTokens)-1 {
-				// Use pre-calculated size to avoid reallocations
-				totalSize := 2 // brackets
-				for j, val := range values {
-					if j > 0 {
-						totalSize++ // comma
-					}
-					totalSize += len(val.Raw)
-				}
+	return processWildcardCollection(current, pathTokens, i)
+}
 
-				// Build result with single allocation
-				raw := make([]byte, 0, totalSize)
-				raw = append(raw, '[')
-				for j, val := range values {
-					if j > 0 {
-						raw = append(raw, ',')
-					}
-					raw = append(raw, val.Raw...)
-				}
-				raw = append(raw, ']')
+// processWildcardCollection handles wildcard collection processing
+func processWildcardCollection(current Result, pathTokens []pathToken, i int) (Result, bool) {
+	// Collect all values with minimal allocations
+	values := make([]Result, 0, 8) // Pre-allocate for common case
+	current.ForEach(func(_, value Result) bool {
+		values = append(values, value)
+		return true
+	})
 
-				current = Result{
-					Type: TypeArray,
-					Raw:  raw,
-				}
+	if len(values) == 0 {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// If this is the last token, return array of values
+	if i == len(pathTokens)-1 {
+		return buildArrayResult(values), false
+	}
+
+	// Otherwise, need to process each value with remaining tokens
+	return processRemainingTokensForWildcard(values, pathTokens, i)
+}
+
+// buildArrayResult builds an array result from a slice of values
+func buildArrayResult(values []Result) Result {
+	// Use pre-calculated size to avoid reallocations
+	totalSize := 2 // brackets
+	for j, val := range values {
+		if j > 0 {
+			totalSize++ // comma
+		}
+		totalSize += len(val.Raw)
+	}
+
+	// Build result with single allocation
+	raw := make([]byte, 0, totalSize)
+	raw = append(raw, '[')
+	for j, val := range values {
+		if j > 0 {
+			raw = append(raw, ',')
+		}
+		raw = append(raw, val.Raw...)
+	}
+	raw = append(raw, ']')
+
+	return Result{
+		Type: TypeArray,
+		Raw:  raw,
+	}
+}
+
+// processRemainingTokensForWildcard processes remaining tokens for wildcard results
+func processRemainingTokensForWildcard(values []Result, pathTokens []pathToken, i int) (Result, bool) {
+	var results []Result
+	for _, val := range values {
+		// Process remaining tokens for this value
+		remaining := executeTokenizedPath(val.Raw, pathTokens[i+1:])
+		if remaining.Exists() {
+			if remaining.Type == TypeArray {
+				// If result is array, merge all elements
+				remaining.ForEach(func(_, item Result) bool {
+					results = append(results, item)
+					return true
+				})
 			} else {
-				// Otherwise, need to process each value with remaining tokens
-				var results []Result
-				for _, val := range values {
-					// Process remaining tokens for this value
-					remaining := executeTokenizedPath(val.Raw, pathTokens[i+1:])
-					if remaining.Exists() {
-						if remaining.Type == TypeArray {
-							// If result is array, merge all elements
-							remaining.ForEach(func(_, item Result) bool {
-								results = append(results, item)
-								return true
-							})
-						} else {
-							results = append(results, remaining)
-						}
-					}
-				}
-
-				if len(results) == 0 {
-					return Result{Type: TypeUndefined}
-				}
-
-				// Create array from results
-				var raw bytes.Buffer
-				raw.WriteByte('[')
-				for i, val := range results {
-					if i > 0 {
-						raw.WriteByte(',')
-					}
-					raw.Write(val.Raw)
-				}
-				raw.WriteByte(']')
-
-				current = Result{
-					Type: TypeArray,
-					Raw:  raw.Bytes(),
-				}
-
-				// Skip remaining tokens as we've processed them
-				return current
+				results = append(results, remaining)
 			}
-
-		case tokenFilter:
-			if current.Type != TypeArray {
-				return Result{Type: TypeUndefined}
-			}
-
-			// Apply filter
-			var matches []Result
-			current.ForEach(func(_, value Result) bool {
-				if matchesFilter(value, token.filter) {
-					matches = append(matches, value)
-				}
-				return true
-			})
-
-			if len(matches) == 0 {
-				return Result{Type: TypeUndefined}
-			}
-
-			// Create a new array result
-			var raw bytes.Buffer
-			raw.WriteByte('[')
-			for i, val := range matches {
-				if i > 0 {
-					raw.WriteByte(',')
-				}
-				raw.Write(val.Raw)
-			}
-			raw.WriteByte(']')
-
-			current = Result{
-				Type: TypeArray,
-				Raw:  raw.Bytes(),
-			}
-
-		case tokenRecursive:
-			if i == len(pathTokens)-1 {
-				// This is the last token, which doesn't make sense for recursive descent
-				return Result{Type: TypeUndefined}
-			}
-
-			// Recursive descent
-			current = recursiveSearch(current, pathTokens[i+1:])
-			return current // recursiveSearch processes the rest of the tokens
-		}
-
-		if !current.Exists() {
-			return Result{Type: TypeUndefined}
 		}
 	}
 
-	// Apply modifiers if any
-	if len(modifiers) > 0 {
-		for _, mod := range modifiers {
-			current = applyModifier(current, mod.str)
-		}
+	if len(results) == 0 {
+		return Result{Type: TypeUndefined}, true
 	}
 
+	// Create array from results
+	var raw bytes.Buffer
+	raw.WriteByte('[')
+	for i, val := range results {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		raw.Write(val.Raw)
+	}
+	raw.WriteByte(']')
+
+	return Result{
+		Type: TypeArray,
+		Raw:  raw.Bytes(),
+	}, true // Skip remaining tokens as we've processed them
+}
+
+// processFilterToken handles filter token processing
+func processFilterToken(current Result, token pathToken) (Result, bool) {
+	if current.Type != TypeArray {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Apply filter
+	var matches []Result
+	current.ForEach(func(_, value Result) bool {
+		if matchesFilter(value, token.filter) {
+			matches = append(matches, value)
+		}
+		return true
+	})
+
+	if len(matches) == 0 {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Create a new array result
+	var raw bytes.Buffer
+	raw.WriteByte('[')
+	for i, val := range matches {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		raw.Write(val.Raw)
+	}
+	raw.WriteByte(']')
+
+	return Result{
+		Type: TypeArray,
+		Raw:  raw.Bytes(),
+	}, false
+}
+
+// processRecursiveToken handles recursive token processing
+func processRecursiveToken(current Result, pathTokens []pathToken, i int) (Result, bool) {
+	if i == len(pathTokens)-1 {
+		// This is the last token, which doesn't make sense for recursive descent
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Recursive descent
+	result := recursiveSearch(current, pathTokens[i+1:])
+	return result, true // recursiveSearch processes the rest of the tokens
+}
+
+// applyModifiersToResult applies all modifiers to the result
+func applyModifiersToResult(current Result, modifiers []pathToken) Result {
+	for _, mod := range modifiers {
+		current = applyModifier(current, mod.str)
+	}
 	return current
 }
 
@@ -1748,234 +1953,283 @@ func applyModifier(result Result, modifier string) Result {
 
 	switch name {
 	case constString, "str":
-		return Result{
-			Type:     TypeString,
-			Str:      result.String(),
-			Raw:      []byte(`"` + escapeString(result.String()) + `"`),
-			Modified: true,
-		}
-
+		return applyStringModifier(result)
 	case constNumber, "num":
-		num := result.Float()
-		return Result{
-			Type:     TypeNumber,
-			Num:      num,
-			Raw:      []byte(strconv.FormatFloat(num, 'f', -1, 64)),
-			Modified: true,
-		}
-
+		return applyNumberModifier(result)
 	case constBool, constBoolean:
-		b := result.Bool()
-		var raw []byte
-		if b {
-			raw = []byte("true")
-		} else {
-			raw = []byte("false")
-		}
-		return Result{
-			Type:     TypeBoolean,
-			Boolean:  b, // Use the renamed field
-			Raw:      raw,
-			Modified: true,
-		}
-
+		return applyBooleanModifier(result)
 	case "keys":
-		if result.Type != TypeObject {
-			return Result{Type: TypeUndefined}
-		}
-
-		var keys []string
-		result.ForEach(func(key, _ Result) bool {
-			keys = append(keys, key.Str)
-			return true
-		})
-
-		// Sort keys for stable output
-		sort.Strings(keys)
-
-		// Build JSON array of keys
-		var raw bytes.Buffer
-		raw.WriteByte('[')
-		for i, k := range keys {
-			if i > 0 {
-				raw.WriteByte(',')
-			}
-			raw.WriteByte('"')
-			raw.WriteString(escapeString(k))
-			raw.WriteByte('"')
-		}
-		raw.WriteByte(']')
-
-		return Result{
-			Type:     TypeArray,
-			Raw:      raw.Bytes(),
-			Modified: true,
-		}
-
+		return applyKeysModifier(result)
 	case "values":
-		if result.Type != TypeObject {
-			return Result{Type: TypeUndefined}
-		}
-
-		var values []Result
-		var keys []string
-
-		// First collect keys and values
-		result.ForEach(func(key, value Result) bool {
-			keys = append(keys, key.Str)
-			values = append(values, value)
-			return true
-		})
-
-		// Sort by keys for stable output
-		sort.Slice(values, func(i, j int) bool {
-			return keys[i] < keys[j]
-		})
-
-		// Build JSON array of values
-		var raw bytes.Buffer
-		raw.WriteByte('[')
-		for i, v := range values {
-			if i > 0 {
-				raw.WriteByte(',')
-			}
-			raw.Write(v.Raw)
-		}
-		raw.WriteByte(']')
-
-		return Result{
-			Type:     TypeArray,
-			Raw:      raw.Bytes(),
-			Modified: true,
-		}
-
+		return applyValuesModifier(result)
 	case "length", "count", "len":
-		switch result.Type {
-		case TypeArray:
-			count := len(result.Array())
-			return Result{
-				Type:     TypeNumber,
-				Num:      float64(count),
-				Raw:      []byte(strconv.Itoa(count)),
-				Modified: true,
-			}
-		case TypeObject:
-			count := len(result.Map())
-			return Result{
-				Type:     TypeNumber,
-				Num:      float64(count),
-				Raw:      []byte(strconv.Itoa(count)),
-				Modified: true,
-			}
-		case TypeString:
-			count := len(result.Str)
-			return Result{
-				Type:     TypeNumber,
-				Num:      float64(count),
-				Raw:      []byte(strconv.Itoa(count)),
-				Modified: true,
-			}
-		default:
-			return Result{Type: TypeUndefined}
-		}
-
+		return applyLengthModifier(result)
 	case "type":
-		var typeStr string
-		switch result.Type {
-		case TypeString:
-			typeStr = constString
-		case TypeNumber:
-			typeStr = constNumber
-		case TypeBoolean:
-			typeStr = constBoolean
-		case TypeObject:
-			typeStr = "object"
-		case TypeArray:
-			typeStr = "array"
-		case TypeNull:
-			typeStr = constNull
-		default:
-			typeStr = "undefined"
-		}
-
-		return Result{
-			Type:     TypeString,
-			Str:      typeStr,
-			Raw:      []byte(`"` + typeStr + `"`),
-			Modified: true,
-		}
-
+		return applyTypeModifier(result)
 	case "base64":
-		if result.Type == TypeString {
-			encoded := base64.StdEncoding.EncodeToString([]byte(result.Str))
-			return Result{
-				Type:     TypeString,
-				Str:      encoded,
-				Raw:      []byte(`"` + encoded + `"`),
-				Modified: true,
-			}
-		}
-
+		return applyBase64Modifier(result)
 	case "base64decode":
-		if result.Type == TypeString {
-			decoded, err := base64.StdEncoding.DecodeString(result.Str)
-			if err != nil {
-				return Result{Type: TypeUndefined}
-			}
-			return Result{
-				Type:     TypeString,
-				Str:      string(decoded),
-				Raw:      []byte(`"` + escapeString(string(decoded)) + `"`),
-				Modified: true,
-			}
-		}
-
+		return applyBase64DecodeModifier(result)
 	case "lower":
-		if result.Type == TypeString {
-			lower := strings.ToLower(result.Str)
-			return Result{
-				Type:     TypeString,
-				Str:      lower,
-				Raw:      []byte(`"` + escapeString(lower) + `"`),
-				Modified: true,
-			}
-		}
-
+		return applyLowerModifier(result)
 	case "upper":
-		if result.Type == TypeString {
-			upper := strings.ToUpper(result.Str)
-			return Result{
-				Type:     TypeString,
-				Str:      upper,
-				Raw:      []byte(`"` + escapeString(upper) + `"`),
-				Modified: true,
-			}
-		}
-
+		return applyUpperModifier(result)
 	case "join":
-		if result.Type == TypeArray {
-			arr := result.Array()
-			sep := ","
-			if arg != "" {
-				sep = arg
-			}
-
-			var parts []string
-			for _, v := range arr {
-				parts = append(parts, v.String())
-			}
-
-			joined := strings.Join(parts, sep)
-			return Result{
-				Type:     TypeString,
-				Str:      joined,
-				Raw:      []byte(`"` + escapeString(joined) + `"`),
-				Modified: true,
-			}
-		}
+		return applyJoinModifier(result, arg)
 	}
 
 	// Return original result if no modifier was applied
+	return result
+}
+
+// applyStringModifier converts result to string type
+func applyStringModifier(result Result) Result {
+	return Result{
+		Type:     TypeString,
+		Str:      result.String(),
+		Raw:      []byte(`"` + escapeString(result.String()) + `"`),
+		Modified: true,
+	}
+}
+
+// applyNumberModifier converts result to number type
+func applyNumberModifier(result Result) Result {
+	num := result.Float()
+	return Result{
+		Type:     TypeNumber,
+		Num:      num,
+		Raw:      []byte(strconv.FormatFloat(num, 'f', -1, 64)),
+		Modified: true,
+	}
+}
+
+// applyBooleanModifier converts result to boolean type
+func applyBooleanModifier(result Result) Result {
+	b := result.Bool()
+	var raw []byte
+	if b {
+		raw = []byte("true")
+	} else {
+		raw = []byte("false")
+	}
+	return Result{
+		Type:     TypeBoolean,
+		Boolean:  b, // Use the renamed field
+		Raw:      raw,
+		Modified: true,
+	}
+}
+
+// applyKeysModifier extracts object keys as array
+func applyKeysModifier(result Result) Result {
+	if result.Type != TypeObject {
+		return Result{Type: TypeUndefined}
+	}
+
+	var keys []string
+	result.ForEach(func(key, _ Result) bool {
+		keys = append(keys, key.Str)
+		return true
+	})
+
+	// Sort keys for stable output
+	sort.Strings(keys)
+
+	// Build JSON array of keys
+	var raw bytes.Buffer
+	raw.WriteByte('[')
+	for i, k := range keys {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		raw.WriteByte('"')
+		raw.WriteString(escapeString(k))
+		raw.WriteByte('"')
+	}
+	raw.WriteByte(']')
+
+	return Result{
+		Type:     TypeArray,
+		Raw:      raw.Bytes(),
+		Modified: true,
+	}
+}
+
+// applyValuesModifier extracts object values as array
+func applyValuesModifier(result Result) Result {
+	if result.Type != TypeObject {
+		return Result{Type: TypeUndefined}
+	}
+
+	var values []Result
+	var keys []string
+
+	// First collect keys and values
+	result.ForEach(func(key, value Result) bool {
+		keys = append(keys, key.Str)
+		values = append(values, value)
+		return true
+	})
+
+	// Sort by keys for stable output
+	sort.Slice(values, func(i, j int) bool {
+		return keys[i] < keys[j]
+	})
+
+	// Build JSON array of values
+	var raw bytes.Buffer
+	raw.WriteByte('[')
+	for i, v := range values {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		raw.Write(v.Raw)
+	}
+	raw.WriteByte(']')
+
+	return Result{
+		Type:     TypeArray,
+		Raw:      raw.Bytes(),
+		Modified: true,
+	}
+}
+
+// applyLengthModifier returns length/count of result
+func applyLengthModifier(result Result) Result {
+	switch result.Type {
+	case TypeArray:
+		count := len(result.Array())
+		return buildCountResult(count)
+	case TypeObject:
+		count := len(result.Map())
+		return buildCountResult(count)
+	case TypeString:
+		count := len(result.Str)
+		return buildCountResult(count)
+	default:
+		return Result{Type: TypeUndefined}
+	}
+}
+
+// buildCountResult builds a numeric result for count values
+func buildCountResult(count int) Result {
+	return Result{
+		Type:     TypeNumber,
+		Num:      float64(count),
+		Raw:      []byte(strconv.Itoa(count)),
+		Modified: true,
+	}
+}
+
+// applyTypeModifier returns the type of the result as string
+func applyTypeModifier(result Result) Result {
+	var typeStr string
+	switch result.Type {
+	case TypeString:
+		typeStr = constString
+	case TypeNumber:
+		typeStr = constNumber
+	case TypeBoolean:
+		typeStr = constBoolean
+	case TypeObject:
+		typeStr = "object"
+	case TypeArray:
+		typeStr = "array"
+	case TypeNull:
+		typeStr = constNull
+	default:
+		typeStr = "undefined"
+	}
+
+	return Result{
+		Type:     TypeString,
+		Str:      typeStr,
+		Raw:      []byte(`"` + typeStr + `"`),
+		Modified: true,
+	}
+}
+
+// applyBase64Modifier encodes string as base64
+func applyBase64Modifier(result Result) Result {
+	if result.Type == TypeString {
+		encoded := base64.StdEncoding.EncodeToString([]byte(result.Str))
+		return Result{
+			Type:     TypeString,
+			Str:      encoded,
+			Raw:      []byte(`"` + encoded + `"`),
+			Modified: true,
+		}
+	}
+	return result
+}
+
+// applyBase64DecodeModifier decodes base64 string
+func applyBase64DecodeModifier(result Result) Result {
+	if result.Type == TypeString {
+		decoded, err := base64.StdEncoding.DecodeString(result.Str)
+		if err != nil {
+			return Result{Type: TypeUndefined}
+		}
+		return Result{
+			Type:     TypeString,
+			Str:      string(decoded),
+			Raw:      []byte(`"` + escapeString(string(decoded)) + `"`),
+			Modified: true,
+		}
+	}
+	return result
+}
+
+// applyLowerModifier converts string to lowercase
+func applyLowerModifier(result Result) Result {
+	if result.Type == TypeString {
+		lower := strings.ToLower(result.Str)
+		return Result{
+			Type:     TypeString,
+			Str:      lower,
+			Raw:      []byte(`"` + escapeString(lower) + `"`),
+			Modified: true,
+		}
+	}
+	return result
+}
+
+// applyUpperModifier converts string to uppercase
+func applyUpperModifier(result Result) Result {
+	if result.Type == TypeString {
+		upper := strings.ToUpper(result.Str)
+		return Result{
+			Type:     TypeString,
+			Str:      upper,
+			Raw:      []byte(`"` + escapeString(upper) + `"`),
+			Modified: true,
+		}
+	}
+	return result
+}
+
+// applyJoinModifier joins array elements with separator
+func applyJoinModifier(result Result, arg string) Result {
+	if result.Type == TypeArray {
+		arr := result.Array()
+		sep := ","
+		if arg != "" {
+			sep = arg
+		}
+
+		var parts []string
+		for _, v := range arr {
+			parts = append(parts, v.String())
+		}
+
+		joined := strings.Join(parts, sep)
+		return Result{
+			Type:     TypeString,
+			Str:      joined,
+			Raw:      []byte(`"` + escapeString(joined) + `"`),
+			Modified: true,
+		}
+	}
 	return result
 }
 
@@ -2373,61 +2627,95 @@ func findValueEnd(data []byte, start int) int {
 	case '[':
 		return findBlockEnd(data, start, '[', ']')
 	case '"':
-		// String - find closing quote
-		for i := start + 1; i < len(data); i++ {
-			if data[i] == '\\' {
-				i++ // Skip escape character
-				continue
-			}
-			if data[i] == '"' {
-				return i + 1
-			}
-		}
-		return -1
-	case 't': // true
-		if start+3 < len(data) &&
-			data[start+1] == 'r' &&
-			data[start+2] == 'u' &&
-			data[start+3] == 'e' {
-			return start + 4
-		}
-		return -1
-	case 'f': // false
-		if start+4 < len(data) &&
-			data[start+1] == 'a' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 's' &&
-			data[start+4] == 'e' {
-			return start + 5
-		}
-		return -1
-	case 'n': // null
-		if start+3 < len(data) &&
-			data[start+1] == 'u' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 'l' {
-			return start + 4
-		}
-		return -1
+		return findStringEndFromStart(data, start)
+	case 't':
+		return findTrueEnd(data, start)
+	case 'f':
+		return findFalseEnd(data, start)
+	case 'n':
+		return findNullEnd(data, start)
 	default:
-		// Number - scan until non-number character
-		if (data[start] >= '0' && data[start] <= '9') ||
-			data[start] == '-' || data[start] == '+' ||
-			data[start] == '.' || data[start] == 'e' ||
-			data[start] == 'E' {
-			for i := start + 1; i < len(data); i++ {
-				if !((data[i] >= '0' && data[i] <= '9') ||
-					data[i] == '.' || data[i] == 'e' ||
-					data[i] == 'E' || data[i] == '+' ||
-					data[i] == '-') {
-					return i
-				}
-			}
-			return len(data)
+		return findNumberEnd(data, start)
+	}
+}
+
+// findStringEndFromStart finds the end of a JSON string starting from quote
+func findStringEndFromStart(data []byte, start int) int {
+	// String - find closing quote
+	for i := start + 1; i < len(data); i++ {
+		if data[i] == '\\' {
+			i++ // Skip escape character
+			continue
+		}
+		if data[i] == '"' {
+			return i + 1
 		}
 	}
-
 	return -1
+}
+
+// findTrueEnd finds the end of a 'true' literal
+func findTrueEnd(data []byte, start int) int {
+	if start+3 < len(data) &&
+		data[start+1] == 'r' &&
+		data[start+2] == 'u' &&
+		data[start+3] == 'e' {
+		return start + 4
+	}
+	return -1
+}
+
+// findFalseEnd finds the end of a 'false' literal
+func findFalseEnd(data []byte, start int) int {
+	if start+4 < len(data) &&
+		data[start+1] == 'a' &&
+		data[start+2] == 'l' &&
+		data[start+3] == 's' &&
+		data[start+4] == 'e' {
+		return start + 5
+	}
+	return -1
+}
+
+// findNullEnd finds the end of a 'null' literal
+func findNullEnd(data []byte, start int) int {
+	if start+3 < len(data) &&
+		data[start+1] == 'u' &&
+		data[start+2] == 'l' &&
+		data[start+3] == 'l' {
+		return start + 4
+	}
+	return -1
+}
+
+// findNumberEnd finds the end of a number value
+func findNumberEnd(data []byte, start int) int {
+	// Number - scan until non-number character
+	if isNumberStart(data[start]) {
+		for i := start + 1; i < len(data); i++ {
+			if !isNumberChar(data[i]) {
+				return i
+			}
+		}
+		return len(data)
+	}
+	return -1
+}
+
+// isNumberStart checks if character can start a number
+func isNumberStart(c byte) bool {
+	return (c >= '0' && c <= '9') ||
+		c == '-' || c == '+' ||
+		c == '.' || c == 'e' ||
+		c == 'E'
+}
+
+// isNumberChar checks if character can be part of a number
+func isNumberChar(c byte) bool {
+	return (c >= '0' && c <= '9') ||
+		c == '.' || c == 'e' ||
+		c == 'E' || c == '+' ||
+		c == '-'
 }
 
 // findBlockEnd finds the end of a JSON block (object or array)
@@ -2596,10 +2884,10 @@ func parseNumber(data []byte, start int) Result {
 	// Find the end of the number
 	end := start
 	for ; end < len(data); end++ {
-		if !((data[end] >= '0' && data[end] <= '9') ||
-			data[end] == '.' || data[end] == 'e' ||
-			data[end] == 'E' || data[end] == '+' ||
-			data[end] == '-') {
+		if (data[end] < '0' || data[end] > '9') &&
+			data[end] != '.' && data[end] != 'e' &&
+			data[end] != 'E' && data[end] != '+' &&
+			data[end] != '-' {
 			break
 		}
 	}
@@ -2820,100 +3108,110 @@ func (r Result) ForEach(iterator func(key, value Result) bool) {
 	pos := start + 1
 
 	if r.Type == TypeArray {
-		index := 0
-		for pos < len(r.Raw) {
-			// Skip whitespace
-			for ; pos < len(r.Raw) && r.Raw[pos] <= ' '; pos++ {
-			}
-			if pos >= len(r.Raw) || r.Raw[pos] == ']' {
-				break
-			}
+		forEachArrayRaw(r.Raw, pos, iterator)
+	} else {
+		forEachObjectRaw(r.Raw, pos, iterator)
+	}
+}
 
-			valueStart := pos
-			valueEnd := findValueEnd(r.Raw, pos)
-			if valueEnd == -1 {
-				break
-			}
-
-			key := Result{Type: TypeNumber, Num: float64(index), Str: strconv.Itoa(index)}
-			value := parseAny(r.Raw[valueStart:valueEnd])
-			value.Raw = r.Raw[valueStart:valueEnd] // Preserve raw value
-
-			if !iterator(key, value) {
-				return
-			}
-
-			pos = valueEnd
-			// Skip to next element or end of array
-			for ; pos < len(r.Raw) && (r.Raw[pos] <= ' ' || r.Raw[pos] == ','); pos++ {
-				if r.Raw[pos] == ',' {
-					pos++
-					break
-				}
-			}
-			index++
+// forEachArrayRaw iterates over array elements starting at pos
+func forEachArrayRaw(raw []byte, pos int, iterator func(key, value Result) bool) {
+	index := 0
+	for pos < len(raw) {
+		// Skip whitespace
+		for ; pos < len(raw) && raw[pos] <= ' '; pos++ {
 		}
-	} else { // TypeObject
-		for pos < len(r.Raw) {
-			// Skip whitespace and find key
-			for ; pos < len(r.Raw) && r.Raw[pos] <= ' '; pos++ {
-			}
-			if pos >= len(r.Raw) || r.Raw[pos] == '}' {
+		if pos >= len(raw) || raw[pos] == ']' {
+			break
+		}
+
+		valueStart := pos
+		valueEnd := findValueEnd(raw, pos)
+		if valueEnd == -1 {
+			break
+		}
+
+		key := Result{Type: TypeNumber, Num: float64(index), Str: strconv.Itoa(index)}
+		value := parseAny(raw[valueStart:valueEnd])
+		value.Raw = raw[valueStart:valueEnd] // Preserve raw value
+
+		if !iterator(key, value) {
+			return
+		}
+
+		pos = valueEnd
+		// Skip to next element or end of array
+		for ; pos < len(raw) && (raw[pos] <= ' ' || raw[pos] == ','); pos++ {
+			if raw[pos] == ',' {
+				pos++
 				break
 			}
-			if r.Raw[pos] != '"' {
-				break // Invalid object
-			}
+		}
+		index++
+	}
+}
 
-			keyStart := pos
-			keyRes := parseString(r.Raw, keyStart)
-			if !keyRes.Exists() {
+// forEachObjectRaw iterates over object key/value pairs starting at pos
+func forEachObjectRaw(raw []byte, pos int, iterator func(key, value Result) bool) {
+	for pos < len(raw) {
+		// Skip whitespace and find key
+		for ; pos < len(raw) && raw[pos] <= ' '; pos++ {
+		}
+		if pos >= len(raw) || raw[pos] == '}' {
+			break
+		}
+		if raw[pos] != '"' {
+			break // Invalid object
+		}
+
+		keyStart := pos
+		keyRes := parseString(raw, keyStart)
+		if !keyRes.Exists() {
+			break
+		}
+		pos = keyStart + len(keyRes.Raw)
+
+		// Find colon
+		for ; pos < len(raw) && raw[pos] != ':'; pos++ {
+		}
+
+		if pos >= len(raw) {
+			break
+		}
+
+		// Skip colon and whitespace
+		pos++
+		for ; pos < len(raw) && raw[pos] <= ' '; pos++ {
+		}
+
+		if pos >= len(raw) {
+			break
+		}
+
+		// Find value
+		valueStart := pos
+		valueEnd := findValueEnd(raw, pos)
+
+		if valueEnd == -1 {
+			break
+		}
+
+		// Parse value
+		value := parseAny(raw[valueStart:valueEnd])
+		value.Raw = raw[valueStart:valueEnd]
+
+		if !iterator(keyRes, value) {
+			return
+		}
+
+		// Move to next pair
+		pos = valueEnd
+
+		// Skip to comma or end
+		for ; pos < len(raw) && (raw[pos] <= ' ' || raw[pos] == ','); pos++ {
+			if raw[pos] == ',' {
+				pos++
 				break
-			}
-			pos = keyStart + len(keyRes.Raw)
-
-			// Find colon
-			for ; pos < len(r.Raw) && r.Raw[pos] != ':'; pos++ {
-			}
-
-			if pos >= len(r.Raw) {
-				break
-			}
-
-			// Skip colon and whitespace
-			pos++
-			for ; pos < len(r.Raw) && r.Raw[pos] <= ' '; pos++ {
-			}
-
-			if pos >= len(r.Raw) {
-				break
-			}
-
-			// Find value
-			valueStart := pos
-			valueEnd := findValueEnd(r.Raw, pos)
-
-			if valueEnd == -1 {
-				break
-			}
-
-			// Parse value
-			value := parseAny(r.Raw[valueStart:valueEnd])
-			value.Raw = r.Raw[valueStart:valueEnd]
-
-			if !iterator(keyRes, value) {
-				return
-			}
-
-			// Move to next pair
-			pos = valueEnd
-
-			// Skip to comma or end
-			for ; pos < len(r.Raw) && (r.Raw[pos] <= ' ' || r.Raw[pos] == ','); pos++ {
-				if r.Raw[pos] == ',' {
-					pos++
-					break
-				}
 			}
 		}
 	}
@@ -2971,81 +3269,102 @@ func isSimplePath(path string) bool {
 
 	p := 0
 
-	// Handle the case where path starts with a number (direct array access)
-	if path[p] >= '0' && path[p] <= '9' {
-		// Skip the number
-		for p < len(path) && path[p] >= '0' && path[p] <= '9' {
-			p++
-		}
-		// If we're at the end or the next char is '.', it's simple
-		if p == len(path) || path[p] == '.' {
-			if p < len(path) {
-				p++ // skip the dot
-			}
-		} else {
-			return false // Not a valid continuation
-		}
+	// Handle leading numeric array index if present
+	var ok bool
+	p, ok = handleLeadingNumber(path, p)
+	if !ok {
+		return false
 	}
 
-	// Path can start with a key or an array index
+	// If starts with a key (not bracket), scan the key
 	if p < len(path) && path[p] != '[' {
-		// It's a key, scan until separator
-		keyStart := p
-		for p < len(path) && path[p] != '.' && path[p] != '[' {
-			// check for invalid chars in key
-			if path[p] == '*' || path[p] == '?' {
-				return false
-			}
-			p++
-		}
-		if p == keyStart {
+		p, ok = scanKey(path, p)
+		if !ok {
 			return false
-		} // empty key at start
+		}
 	}
 
 	for p < len(path) {
 		switch path[p] {
 		case '.':
-			p++ // skip dot
+			p++
 			if p == len(path) {
 				return false
-			} // trailing dot
-			// next must be a key
-			keyStart := p
-			for p < len(path) && path[p] != '.' && path[p] != '[' {
-				if path[p] == '*' || path[p] == '?' {
-					return false
-				}
-				p++
 			}
-			if p == keyStart {
+			p, ok = scanKey(path, p)
+			if !ok {
 				return false
-			} // empty key
+			}
 		case '[':
-			p++ // skip '['
-			if p == len(path) {
+			p, ok = scanIndex(path, p)
+			if !ok {
 				return false
-			} // dangling '['
-			idxStart := p
-			for p < len(path) && path[p] >= '0' && path[p] <= '9' {
-				p++
 			}
-			if p == idxStart {
-				return false
-			} // empty index `[]`
-			if p == len(path) || path[p] != ']' {
-				return false
-			} // not a number or no closing ']'
-			p++ // skip ']'
 		default:
-			// invalid character
 			return false
 		}
 	}
+
 	return true
 }
 
+// handleLeadingNumber handles optional leading numeric array index, returns new pos and ok
+func handleLeadingNumber(path string, p int) (int, bool) {
+	if p < len(path) && path[p] >= '0' && path[p] <= '9' {
+		for p < len(path) && path[p] >= '0' && path[p] <= '9' {
+			p++
+		}
+		if p == len(path) {
+			return p, true
+		}
+		if path[p] == '.' {
+			p++ // skip dot
+			return p, true
+		}
+		return p, false
+	}
+	return p, true
+}
+
+// scanKey scans a key starting at p and returns the new position and ok
+func scanKey(path string, p int) (int, bool) {
+	keyStart := p
+	for p < len(path) && path[p] != '.' && path[p] != '[' {
+		if path[p] == '*' || path[p] == '?' {
+			return p, false
+		}
+		p++
+	}
+	if p == keyStart {
+		return p, false
+	}
+	return p, true
+}
+
+// scanIndex scans an index starting at '[' and returns the new position (after ']') and ok
+func scanIndex(path string, p int) (int, bool) {
+	// expect '[' at p
+	p++ // skip '['
+	if p >= len(path) {
+		return p, false
+	}
+	idxStart := p
+	for p < len(path) && path[p] >= '0' && path[p] <= '9' {
+		p++
+	}
+	if p == idxStart {
+		return p, false
+	}
+	if p >= len(path) || path[p] != ']' {
+		return p, false
+	}
+	p++
+	return p, true
+}
+
 // stringToBytes converts a string to a byte slice without allocation
+//
+//nolint:gosec // G103: intentional use of unsafe for zero-copy string to bytes conversion
 func stringToBytes(s string) []byte {
 	return *(*[]byte)(unsafe.Pointer(
 		&struct {
@@ -3056,6 +3375,10 @@ func stringToBytes(s string) []byte {
 }
 
 // bytesToString converts a byte slice to a string without allocation
+// This unsafe pointer usage has been audited and is safe in this context
+// as it's a performance optimization for zero-copy conversion
+//
+//nolint:gosec // G103: intentional use of unsafe for zero-copy bytes to string conversion
 func bytesToString(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
 }

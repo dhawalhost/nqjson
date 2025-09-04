@@ -1769,7 +1769,7 @@ func TestComplexPathOptimizations(t *testing.T) {
 	// Test tokenizePath and executeTokenizedPath (0% coverage)
 	t.Run("tokenizedPath", func(t *testing.T) {
 		// Complex paths that might trigger tokenization
-		tokenData := `{
+		data := `{
 			"data": {
 				"items": [
 					{"tags": ["a", "b", "c"]},
@@ -1779,7 +1779,7 @@ func TestComplexPathOptimizations(t *testing.T) {
 		}`
 
 		// Path that might require tokenization
-		result := Get([]byte(tokenData), "data.items.1.tags.2")
+		result := Get([]byte(data), "data.items.1.tags.2")
 		if result.String() != "f" {
 			t.Errorf("tokenizedPath failed: expected f, got %s", result.String())
 		}

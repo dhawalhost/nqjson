@@ -81,6 +81,9 @@ type SetOptions struct {
 
 	// Context for cancelable operations
 	Context context.Context
+
+	// nextPath is the full path string for advanced operations (internal use)
+	nextPath string
 }
 
 // DefaultSetOptions provides default settings for set operations
@@ -221,48 +224,7 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 
 	// Ultra-fast path optimization: prioritize byte-level operations for maximum performance
 	if isSimpleSetPath(path) && !opts.ReplaceInPlace && !opts.MergeObjects && !opts.MergeArrays {
-		// Try ultra-fast single key operations first (highest priority)
-		if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
-			// Ultra-fast replace for existing keys (works on any JSON format)
-			if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
-				return fast, nil
-			}
-			// Ultra-fast add for new keys (compact JSON only)
-			if !isLikelyPretty(json) {
-				if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
-					return fast, nil
-				}
-			}
-		}
-
-		// Fast path for simple dot notation (higher priority than generic replace)
-		if strings.Count(path, ".") <= 3 && !strings.Contains(path, "[") {
-			if fast, ok, err := setFastSimpleDotPath(json, path, value); err == nil && ok {
-				return fast, nil
-			}
-		}
-
-		// Fast path for array element updates (higher priority)
-		if strings.Contains(path, ".") && (strings.Contains(path, "0") || strings.Contains(path, "1") || strings.Contains(path, "2")) {
-			if fast, ok, err := setFastArrayElement(json, path, value); err == nil && ok {
-				return fast, nil
-			}
-		}
-
-		// Generic fast replace (existing values)
-		if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
-			return fast, nil
-		}
-
-		// Fast insert/append (new values) - compact JSON only
-		if !isLikelyPretty(json) {
-			if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
-				return fast, nil
-			}
-		}
-
-		// Deep create nested objects quickly
-		if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
+		if fast, ok, err := trySimpleFastPaths(json, path, value, opts); err == nil && ok {
 			return fast, nil
 		}
 	}
@@ -394,12 +356,9 @@ func isSimpleSetPath(path string) bool {
 		return false
 	}
 
-	// Check for invalid characters that would indicate complex paths
-	for _, c := range path {
-		switch c {
-		case '|', '*', '?', '#', '(', ')', '=', '!', '<', '>', '~':
-			return false
-		}
+	// Disallow characters that indicate complex paths
+	if hasComplexChars(path) {
+		return false
 	}
 
 	// Should only contain dots, letters, numbers, and brackets with numbers
@@ -409,55 +368,90 @@ func isSimpleSetPath(path string) bool {
 			continue
 		}
 
-		// Check for array notation
 		if strings.Contains(part, "[") {
-			base := part[:strings.Index(part, "[")]
-			// Verify base name is valid
-			for _, c := range base {
-				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-					(c >= '0' && c <= '9') || c == '_' || c == '-') {
-					return false
-				}
-			}
-
-			// Extract indexes and verify they're numeric
-			start := strings.Index(part, "[")
-			for start != -1 && start < len(part) {
-				end := strings.Index(part[start:], "]")
-				if end == -1 {
-					return false
-				}
-				end += start
-
-				// Check if the index is numeric
-				idx := part[start+1 : end]
-				for _, c := range idx {
-					if c < '0' || c > '9' {
-						return false
-					}
-				}
-
-				// Move to next bracket
-				if end+1 < len(part) {
-					start = strings.Index(part[end+1:], "[")
-					if start != -1 {
-						start += end + 1
-					}
-				} else {
-					start = -1
-				}
+			if !validateBracketPart(part) {
+				return false
 			}
 		} else {
-			// Simple key - verify it's valid
-			for _, c := range part {
-				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-					(c >= '0' && c <= '9') || c == '_' || c == '-') {
-					return false
-				}
+			if !isValidName(part) {
+				return false
 			}
 		}
 	}
 
+	return true
+}
+
+// hasComplexChars returns true if path contains special characters that make it complex
+func hasComplexChars(path string) bool {
+	for _, c := range path {
+		switch c {
+		case '|', '*', '?', '#', '(', ')', '=', '!', '<', '>', '~':
+			return true
+		}
+	}
+	return false
+}
+
+// isValidName checks that a simple key contains only allowed characters
+func isValidName(part string) bool {
+	if part == "" {
+		return false
+	}
+	for _, c := range part {
+		if !isAllowedNameRune(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// isAllowedNameRune reports if rune is one of allowed characters in keys
+func isAllowedNameRune(c rune) bool {
+	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_' || c == '-' {
+		return true
+	}
+	return false
+}
+
+// validateBracketPart validates a part that contains bracket notation like "key[0][1]"
+func validateBracketPart(part string) bool {
+	bracketIdx := strings.Index(part, "[")
+	base := part[:bracketIdx]
+	if base != "" {
+		if !isValidName(base) {
+			return false
+		}
+	}
+
+	start := bracketIdx
+	for start != -1 && start < len(part) {
+		end := strings.Index(part[start:], "]")
+		if end == -1 {
+			return false
+		}
+		end += start
+
+		idx := part[start+1 : end]
+		for _, c := range idx {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+
+		// Move to next bracket
+		if end+1 < len(part) {
+			next := strings.Index(part[end+1:], "[")
+			if next == -1 {
+				start = -1
+			} else {
+				start = end + 1 + next
+			}
+		} else {
+			start = -1
+		}
+	}
 	return true
 }
 
@@ -605,6 +599,57 @@ func setFastReplace(data []byte, path string, value interface{}) ([]byte, bool, 
 	return buildReplacementResult(data, window, valueStart, valueEnd, value)
 }
 
+// trySimpleFastPaths runs the collection of fast-path checks for simple set paths.
+// It returns (result, ok, err) matching the other fast-path helpers' conventions.
+func trySimpleFastPaths(json []byte, path string, value interface{}, opts SetOptions) ([]byte, bool, error) {
+	// Try ultra-fast single key operations first (highest priority)
+	if !strings.Contains(path, ".") && !strings.Contains(path, "[") && len(path) > 0 {
+		// Ultra-fast replace for existing keys (works on any JSON format)
+		if fast, ok, err := setFastReplaceSimpleKey(json, path, value); err == nil && ok {
+			return fast, true, nil
+		}
+		// Ultra-fast add for new keys (compact JSON only)
+		if !isLikelyPretty(json) {
+			if fast, ok, err := setFastAddSimpleKey(json, path, value); err == nil && ok {
+				return fast, true, nil
+			}
+		}
+	}
+
+	// Fast path for simple dot notation (higher priority than generic replace)
+	if strings.Count(path, ".") <= 3 && !strings.Contains(path, "[") {
+		if fast, ok, err := setFastSimpleDotPath(json, path, value); err == nil && ok {
+			return fast, true, nil
+		}
+	}
+
+	// Fast path for array element updates (higher priority)
+	if strings.Contains(path, ".") && (strings.Contains(path, "0") || strings.Contains(path, "1") || strings.Contains(path, "2")) {
+		if fast, ok, err := setFastArrayElement(json, path, value); err == nil && ok {
+			return fast, true, nil
+		}
+	}
+
+	// Generic fast replace (existing values)
+	if fast, ok, err := setFastReplace(json, path, value); err == nil && ok {
+		return fast, true, nil
+	}
+
+	// Fast insert/append (new values) - compact JSON only
+	if !isLikelyPretty(json) {
+		if fast, ok, err := setFastInsertOrAppend(json, path, value); err == nil && ok {
+			return fast, true, nil
+		}
+	}
+
+	// Deep create nested objects quickly
+	if fast, ok, err := setFastDeepCreateObjects(json, path, value); err == nil && ok {
+		return fast, true, nil
+	}
+
+	return nil, false, nil
+}
+
 // isLikelyPretty returns true if the JSON appears to be pretty-printed (contains newlines/indentation)
 func isLikelyPretty(data []byte) bool {
 	// Heuristic: presence of '\n' or two-space indentation pattern suggests pretty
@@ -712,6 +757,259 @@ func appendCompactBytes(dst, src []byte) []byte {
 	return dst
 }
 
+// FastInsertContext holds the state for fast insertion operations
+type FastInsertContext struct {
+	data       []byte
+	window     []byte
+	baseOffset int
+	parts      []string
+}
+
+// fastPathHandler processes a path component during fast insertion
+func fastPathHandler(ctx *FastInsertContext, part string, i int) (bool, error) {
+	if part == "" {
+		return false, nil
+	}
+
+	// Handle bracket notation in part (e.g., "users[0][name]")
+	if strings.Contains(part, "[") {
+		success, err := handleBracketNotation(ctx, part)
+		if !success || err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	// Handle numeric indices directly (e.g., "users.0.name")
+	if isAllDigits(part) {
+		success := handleNumericIndex(ctx, part)
+		if !success {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	// Handle simple object key
+	s, e := getObjectValueRange(ctx.window, part)
+	if s < 0 {
+		return false, nil
+	}
+	ctx.baseOffset += s
+	ctx.window = ctx.window[s:e]
+	return true, nil
+}
+
+// handleBracketNotation processes a path part containing bracket notation
+func handleBracketNotation(ctx *FastInsertContext, part string) (bool, error) {
+	base := part
+	bracketIndex := strings.Index(part, "[")
+	if bracketIndex >= 0 {
+		base = part[:bracketIndex]
+	}
+
+	// Handle the base object key if it exists
+	if base != "" {
+		s, e := getObjectValueRange(ctx.window, base)
+		if s < 0 {
+			return false, nil
+		}
+		ctx.baseOffset += s
+		ctx.window = ctx.window[s:e]
+	}
+
+	// Process array indices if present
+	if bracketIndex >= 0 {
+		var err error
+		ctx.window, ctx.baseOffset, err = processArrayIndices(ctx.window, part, ctx.baseOffset)
+		if err != nil || ctx.window == nil {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
+// handleNumericIndex processes a numeric array index in a path
+func handleNumericIndex(ctx *FastInsertContext, part string) bool {
+	idx, _ := strconv.Atoi(part)
+	s, e := getArrayElementRange(ctx.window, idx)
+	if s < 0 {
+		return false
+	}
+	ctx.baseOffset += s
+	ctx.window = ctx.window[s:e]
+	return true
+}
+
+// handleObjectInsertion manages insertion of a key-value pair into a JSON object
+func handleObjectInsertion(data []byte, window []byte, parentStart int, parentEnd int, key string, encVal []byte) ([]byte, bool, error) {
+	// Find insertion point: before closing '}'
+	ws := 0
+	for ws < len(window) && window[ws] <= ' ' {
+		ws++
+	}
+	if ws >= len(window) {
+		return nil, false, nil
+	}
+
+	// First, check if key already exists; if exists, this isn't insert
+	keySeg := fastGetObjectValue(window, key)
+	if keySeg != nil {
+		return nil, false, nil
+	}
+
+	endObj := findBlockEnd(window, ws, '{', '}')
+	if endObj == -1 {
+		return nil, false, ErrInvalidJSON
+	}
+
+	// Build key bytes
+	keyJSON, _ := json.Marshal(key)
+
+	// Determine if object currently empty
+	inner := bytes.TrimSpace(window[ws+1 : endObj-1])
+	needComma := len(inner) > 0
+
+	// Create the insertion
+	insert := make([]byte, 0, len(window)+(len(keyJSON)+1+len(encVal)+1+1))
+	insert = append(insert, window[:endObj-1]...)
+	if needComma {
+		insert = append(insert, ',')
+	}
+	insert = append(insert, keyJSON...)
+	insert = append(insert, ':')
+	insert = append(insert, encVal...)
+	insert = append(insert, window[endObj-1:]...)
+
+	// Splice back into data
+	out := make([]byte, 0, len(data)-len(window)+len(insert))
+	out = append(out, data[:parentStart]...)
+	out = append(out, insert...)
+	out = append(out, data[parentEnd:]...)
+
+	return out, true, nil
+}
+
+// handleArrayInsertion manages insertion of a value into a JSON array
+func handleArrayInsertion(data []byte, window []byte, parentStart int, parentEnd int, index string, encVal []byte) ([]byte, bool, error) {
+	// Find array start
+	ws := 0
+	for ws < len(window) && window[ws] <= ' ' {
+		ws++
+	}
+	if ws >= len(window) || window[ws] != '[' {
+		return nil, false, nil
+	}
+
+	// Ensure the index is numeric
+	if !isAllDigits(index) {
+		return nil, false, nil
+	}
+
+	// Find array end and current length
+	endArr := findBlockEnd(window, ws, '[', ']')
+	if endArr == -1 {
+		return nil, false, ErrInvalidJSON
+	}
+
+	// Calculate current array length
+	inner := bytes.TrimSpace(window[ws+1 : endArr-1])
+	curLen := calculateArrayLength(inner)
+
+	// Convert target index to int
+	targetIdx, _ := strconv.Atoi(index)
+	if targetIdx < curLen {
+		// Not an append/extend operation
+		return nil, false, nil
+	}
+
+	// Build the insertion
+	insert := createArrayInsertion(window, endArr, curLen, targetIdx, encVal)
+
+	// Splice back into data
+	out := make([]byte, 0, len(data)-len(window)+len(insert))
+	out = append(out, data[:parentStart]...)
+	out = append(out, insert...)
+	out = append(out, data[parentEnd:]...)
+
+	return out, true, nil
+}
+
+// calculateArrayLength counts the number of elements in an array
+func calculateArrayLength(inner []byte) int {
+	if len(inner) == 0 {
+		return 0
+	}
+
+	curLen := 0
+	pos := 0
+	for pos < len(inner) {
+		// Skip whitespace
+		for pos < len(inner) && inner[pos] <= ' ' {
+			pos++
+		}
+		if pos >= len(inner) {
+			break
+		}
+
+		// Found a value
+		curLen++
+
+		// Skip to the end of this value
+		ve := findValueEnd(inner, pos)
+		if ve == -1 {
+			break
+		}
+		pos = ve
+
+		// Skip to the next comma
+		for pos < len(inner) && inner[pos] != ',' {
+			if inner[pos] <= ' ' {
+				pos++
+				continue
+			}
+			break
+		}
+
+		// Skip past comma if found
+		if pos < len(inner) && inner[pos] == ',' {
+			pos++
+		}
+	}
+
+	return curLen
+}
+
+// createArrayInsertion builds the modified array content for insertion
+func createArrayInsertion(window []byte, endArr int, curLen int, targetIdx int, encVal []byte) []byte {
+	insert := make([]byte, 0, len(window)+32)
+	insert = append(insert, window[:endArr-1]...)
+
+	// Add comma if there are existing elements
+	if curLen > 0 {
+		insert = append(insert, ',')
+	}
+
+	// Add nulls for gaps
+	for i := curLen; i < targetIdx; i++ {
+		if i > curLen {
+			insert = append(insert, ',')
+		}
+		insert = append(insert, 'n', 'u', 'l', 'l')
+	}
+
+	// Add comma between last null (if any) and value when targetIdx > curLen
+	if targetIdx > curLen {
+		insert = append(insert, ',')
+	}
+
+	// Add the value and close the array
+	insert = append(insert, encVal...)
+	insert = append(insert, window[endArr-1:]...)
+
+	return insert
+}
+
 // setFastInsertOrAppend can add a new object field or append/extend an array element when parent exists.
 // Returns (result, ok, err). Only supports simple dot paths and compact JSON. No merges or deletions.
 func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte, bool, error) {
@@ -728,60 +1026,29 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 		return nil, false, nil
 	}
 
+	// Create context for path navigation
+	ctx := &FastInsertContext{
+		data:       data,
+		window:     data,
+		baseOffset: 0,
+		parts:      parts,
+	}
+
 	// Walk to parent container window
-	window := data
-	baseOffset := 0
 	for i, part := range parts[:len(parts)-1] {
-		if part == "" {
+		success, err := fastPathHandler(ctx, part, i)
+		if !success {
 			return nil, false, nil
 		}
-		// bracket form inside part
-		if strings.Contains(part, "[") {
-			base := part[:strings.Index(part, "[")]
-			if base != "" {
-				s, e := getObjectValueRange(window, base)
-				if s < 0 {
-					return nil, false, nil
-				}
-				baseOffset += s
-				window = window[s:e]
-			}
-			// iterate indices
-			var err error
-			window, baseOffset, err = processArrayIndices(window, part, baseOffset)
-			if err != nil {
-				return nil, false, err
-			}
-			if window == nil {
-				return nil, false, nil
-			}
-			continue
+		if err != nil {
+			return nil, false, err
 		}
-
-		if isAllDigits(part) {
-			idx, _ := strconv.Atoi(part)
-			s, e := getArrayElementRange(window, idx)
-			if s < 0 {
-				return nil, false, nil
-			}
-			baseOffset += s
-			window = window[s:e]
-			continue
-		}
-
-		// simple key
-		s, e := getObjectValueRange(window, part)
-		if s < 0 {
-			return nil, false, nil
-		}
-		baseOffset += s
-		window = window[s:e]
-		_ = i
+		_ = i // Silence unused variable warning
 	}
 
 	// Now window is the parent container's value bytes; parentStart..parentEnd in data
-	parentStart := baseOffset
-	parentEnd := parentStart + len(window)
+	parentStart := ctx.baseOffset
+	parentEnd := parentStart + len(ctx.window)
 	if parentStart < 0 || parentEnd > len(data) || parentStart >= parentEnd {
 		return nil, false, nil
 	}
@@ -790,10 +1057,10 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 	last := parts[len(parts)-1]
 	// Peek first non-space of window to determine type
 	ws := 0
-	for ws < len(window) && window[ws] <= ' ' {
+	for ws < len(ctx.window) && ctx.window[ws] <= ' ' {
 		ws++
 	}
-	if ws >= len(window) {
+	if ws >= len(ctx.window) {
 		return nil, false, nil
 	}
 
@@ -803,117 +1070,14 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 		return nil, false, err
 	}
 
-	if window[ws] == '{' {
-		// Insert new key if missing
-		// First, check if key already exists; if exists, this isn't insert
-		keySeg := fastGetObjectValue(window, last)
-		if keySeg != nil {
-			return nil, false, nil
-		}
-		// Find insertion point: before closing '}'
-		endObj := findBlockEnd(window, ws, '{', '}')
-		if endObj == -1 {
-			return nil, false, ErrInvalidJSON
-		}
-		// Build key bytes
-		keyJSON, _ := json.Marshal(last)
-		// Determine if object currently empty
-		inner := bytes.TrimSpace(window[ws+1 : endObj-1])
-		needComma := len(inner) > 0
-		insert := make([]byte, 0, len(window)+(len(keyJSON)+1+len(encVal)+1+1))
-		insert = append(insert, window[:endObj-1]...)
-		if needComma {
-			insert = append(insert, ',')
-		}
-		insert = append(insert, keyJSON...)
-		insert = append(insert, ':')
-		insert = append(insert, encVal...)
-		insert = append(insert, window[endObj-1:]...)
-
-		// Splice back into data
-		out := make([]byte, 0, len(data)-len(window)+len(insert))
-		out = append(out, data[:parentStart]...)
-		out = append(out, insert...)
-		out = append(out, data[parentEnd:]...)
-		return out, true, nil
+	// Handle object insertion
+	if ctx.window[ws] == '{' {
+		return handleObjectInsertion(data, ctx.window, parentStart, parentEnd, last, encVal)
 	}
 
-	if window[ws] == '[' {
-		// Array append/extend when last is numeric index >= len(arr)
-		if !isAllDigits(last) {
-			return nil, false, nil
-		}
-		// Find array end and current length by scanning elements
-		endArr := findBlockEnd(window, ws, '[', ']')
-		if endArr == -1 {
-			return nil, false, ErrInvalidJSON
-		}
-		// Compute current length by scanning commas at top-level
-		// Quick count: count values separated by commas at depth 0 within [ws+1, endArr-1]
-		inner := bytes.TrimSpace(window[ws+1 : endArr-1])
-		curLen := 0
-		if len(inner) > 0 {
-			// count values by simple scan using findValueEnd
-			pos := 0
-			for pos < len(inner) {
-				for pos < len(inner) && inner[pos] <= ' ' {
-					pos++
-				}
-				if pos >= len(inner) {
-					break
-				}
-				curLen++
-				ve := findValueEnd(inner, pos)
-				if ve == -1 {
-					break
-				}
-				pos = ve
-				for pos < len(inner) && inner[pos] != ',' {
-					if inner[pos] <= ' ' {
-						pos++
-						continue
-					}
-					break
-				}
-				if pos < len(inner) && inner[pos] == ',' {
-					pos++
-				}
-			}
-		}
-
-		targetIdx, _ := strconv.Atoi(last)
-		if targetIdx < curLen {
-			// not append/extend
-			return nil, false, nil
-		}
-
-		// Build new array content by inserting values/nulls before closing ']'
-		// Fix this logic to remove nulls
-		insert := make([]byte, 0, len(window)+32)
-		insert = append(insert, window[:endArr-1]...)
-		if curLen > 0 {
-			insert = append(insert, ',')
-		}
-		// Add nulls for gaps
-		for i := curLen; i < targetIdx; i++ {
-			if i > curLen {
-				insert = append(insert, ',')
-			}
-			insert = append(insert, 'n', 'u', 'l', 'l')
-		}
-		// Comma between last null (if any) and value when targetIdx > curLen
-		if targetIdx > curLen {
-			insert = append(insert, ',')
-		}
-		// Finally add value
-		insert = append(insert, encVal...)
-		insert = append(insert, window[endArr-1:]...)
-
-		out := make([]byte, 0, len(data)-len(window)+len(insert))
-		out = append(out, data[:parentStart]...)
-		out = append(out, insert...)
-		out = append(out, data[parentEnd:]...)
-		return out, true, nil
+	// Handle array insertion
+	if ctx.window[ws] == '[' {
+		return handleArrayInsertion(data, ctx.window, parentStart, parentEnd, last, encVal)
 	}
 
 	return nil, false, nil
@@ -1246,9 +1410,7 @@ func findKeyValueRange(data []byte, key string) (int, int, int) {
 	keyLen := len(key)
 	for i < len(data) {
 		// Skip whitespace
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
+		i = skipSpaces(data, i)
 		if i >= len(data) || data[i] == '}' {
 			break
 		}
@@ -1258,38 +1420,25 @@ func findKeyValueRange(data []byte, key string) (int, int, int) {
 			return -1, -1, -1
 		}
 		keyStart := i
-		i++
 
-		keyNameStart := i
-		// Find end of key
-		for i < len(data) && data[i] != '"' {
-			if data[i] == '\\' {
-				i++ // Skip escaped character
-			}
-			i++
-		}
-		if i >= len(data) {
+		// Read unquoted key name
+		nameStart, nameEnd, after, err := readUnquotedKey(data, i)
+		if err != nil {
 			return -1, -1, -1
 		}
 
 		// Check if this key matches
-		currentKeyLen := i - keyNameStart
-		if currentKeyLen == keyLen && bytes.Equal(data[keyNameStart:i], []byte(key)) {
-			i++ // Skip closing quote
-
-			// Skip to colon
-			for i < len(data) && data[i] <= ' ' {
-				i++
-			}
+		currentKeyLen := nameEnd - nameStart
+		if currentKeyLen == keyLen && bytes.Equal(data[nameStart:nameEnd], []byte(key)) {
+			// Skip to colon after closing quote
+			i = skipSpaces(data, after)
 			if i >= len(data) || data[i] != ':' {
 				return -1, -1, -1
 			}
 			i++
 
 			// Skip whitespace after colon
-			for i < len(data) && data[i] <= ' ' {
-				i++
-			}
+			i = skipSpaces(data, i)
 
 			valueStart := i
 			valueEnd := findValueEnd(data, i)
@@ -1300,12 +1449,11 @@ func findKeyValueRange(data []byte, key string) (int, int, int) {
 			return keyStart, valueStart, valueEnd
 		}
 
-		i++ // Skip closing quote
+		// Not a match: advance after the closing quote
+		i = after
 
 		// Skip to colon
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
+		i = skipSpaces(data, i)
 		if i >= len(data) || data[i] != ':' {
 			return -1, -1, -1
 		}
@@ -1319,9 +1467,7 @@ func findKeyValueRange(data []byte, key string) (int, int, int) {
 		i = valueEnd
 
 		// Skip to comma or end of object
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
+		i = skipSpaces(data, i)
 		if i >= len(data) || data[i] == '}' {
 			break
 		}
@@ -1424,167 +1570,302 @@ func setFastAddSimpleKey(data []byte, key string, value interface{}) ([]byte, bo
 	return result, true, nil
 }
 
-func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]byte, bool, error) {
-	// Don't use fast path for deletion marker
-	if value == deletionMarkerValue {
-		return nil, false, nil
-	}
+// DeepCreateContext holds the state for deep object creation operations
+type DeepCreateContext struct {
+	data       []byte
+	window     []byte
+	baseOffset int
+	parts      []string
+}
 
+// initializeDeepCreationContext prepares the context for deep object creation
+func initializeDeepCreationContext(data []byte, path string) (*DeepCreateContext, bool, error) {
+	// Don't handle deletion marker or empty data
 	if len(data) == 0 {
 		return nil, false, nil
 	}
 
-	// Ultra-fast path for pure deep creation (benchmark optimization)
-	// Check if this is a simple dot-separated path with no existing components
-	// This optimizes for cases like "preferences.theme.colors.primary" where none exist
-	if !strings.Contains(path, "[") && strings.Count(path, ".") >= 2 {
-		// Quick check: if the first component doesn't exist, we can skip path traversal entirely
-		firstDot := strings.IndexByte(path, '.')
-		if firstDot > 0 {
-			firstKey := path[:firstDot]
-			// Do a fast scan to see if first key exists
-			if !quickKeyExists(data, firstKey) {
-				// Pure creation case - build the entire nested structure directly
-				return buildPureNestedPath(data, path, value)
-			}
-		}
+	// Split the path into parts
+	parts := parseObjectPath(path)
+	if len(parts) < 2 {
+		return nil, false, nil
 	}
 
-	// Fallback to existing logic for mixed cases
+	// Create and initialize the context
+	ctx := &DeepCreateContext{
+		data:       data,
+		window:     data,
+		baseOffset: 0,
+		parts:      parts,
+	}
+
+	return ctx, true, nil
+}
+
+// parseObjectPath splits a path into component parts
+func parseObjectPath(path string) []string {
 	parts := make([]string, 0, 4) // Pre-allocate for common depth
 	start := 0
 	for i := 0; i <= len(path); i++ {
 		if i == len(path) || path[i] == '.' {
 			if i > start {
 				part := path[start:i]
-				// Quick validation - only simple object keys supported
-				if part == "" || isAllDigits(part) || strings.Contains(part, "[") {
-					return nil, false, nil
+				// Include all valid path components including numeric indices
+				if part != "" {
+					parts = append(parts, part)
+				} else {
+					// Empty parts are invalid
+					return nil
 				}
-				parts = append(parts, part)
 			}
 			start = i + 1
 		}
 	}
+	return parts
+}
 
-	if len(parts) < 2 {
-		return nil, false, nil
+// isQuickDeepCreationCandidate checks if a path is suitable for optimized deep creation
+func isQuickDeepCreationCandidate(path string, data []byte) bool {
+	// Check if this is a simple dot-separated path with no brackets
+	if strings.Contains(path, "[") || strings.Count(path, ".") < 2 {
+		return false
 	}
 
-	// Find deepest existing parent object along the path
-	window := data
-	baseOffset := 0
+	// Check if the first component doesn't exist, allowing us to skip path traversal
+	firstDot := strings.IndexByte(path, '.')
+	if firstDot <= 0 {
+		return false
+	}
+
+	firstKey := path[:firstDot]
+	return !quickKeyExists(data, firstKey)
+}
+
+// findDeepestExistingParent navigates to find the deepest existing object in the path
+func findDeepestExistingParent(ctx *DeepCreateContext) (int, bool, error) {
 	lastExisting := -1
-	for i := 0; i < len(parts); i++ {
-		part := parts[i]
-		s, e := getObjectValueRange(window, part)
-		if s < 0 { // missing here; parent is current window object
+
+	// Try to navigate as deep as possible along the path
+	for i := 0; i < len(ctx.parts); i++ {
+		part := ctx.parts[i]
+		s, e := getObjectValueRange(ctx.window, part)
+		if s < 0 {
+			// Missing at this level; parent is current window object
 			lastExisting = i - 1
 			break
 		}
-		// Move into the existing child; must be object to continue
-		// If not object, stop (no fast path)
-		// Check first non-space
-		k := s
-		for k < e && window[k] <= ' ' {
-			k++
+
+		// Verify the child is an object before continuing
+		if !isObjectValue(ctx.window[s:e]) {
+			return -1, false, nil
 		}
-		if k >= e || window[k] != '{' {
-			// child is not object; cannot deep-create purely objects
-			return nil, false, nil
-		}
-		baseOffset += s
-		window = window[s:e]
+
+		// Move into this existing child
+		ctx.baseOffset += s
+		ctx.window = ctx.window[s:e]
 		lastExisting = i
 	}
-	// If nothing exists along the path, allow creating from root object
+
+	// Handle case where nothing exists along the path
 	if lastExisting < 0 {
 		// Ensure root is an object
-		rs := 0
-		for rs < len(window) && window[rs] <= ' ' {
-			rs++
+		if !isRootObject(ctx.window) {
+			return -1, false, nil
 		}
-		if rs >= len(window) || window[rs] != '{' {
-			return nil, false, nil
+
+		// Set window to the root object's content
+		rs := skipToObjectStart(ctx.window) - 1 // -1 to get to the opening brace
+		ctx.baseOffset = rs
+		ctx.window = ctx.window[rs:findBlockEnd(ctx.window, rs, '{', '}')]
+	}
+
+	// Check if there's anything to create
+	if lastExisting >= len(ctx.parts)-1 {
+		return -1, false, nil
+	}
+
+	return lastExisting, true, nil
+}
+
+// isObjectValue checks if a JSON value is an object
+func isObjectValue(value []byte) bool {
+	// Skip whitespace to find the first non-space character
+	k := 0
+	for k < len(value) && value[k] <= ' ' {
+		k++
+	}
+	return k < len(value) && value[k] == '{'
+}
+
+// isRootObject checks if the root JSON value is an object
+func isRootObject(data []byte) bool {
+	rs := 0
+	for rs < len(data) && data[rs] <= ' ' {
+		rs++
+	}
+	return rs < len(data) && data[rs] == '{'
+}
+
+// buildNestedStructure creates a nested object structure for the given keys
+func buildNestedStructure(keys []string, value []byte) []byte {
+	// Calculate exact size needed (plus extra for arrays)
+	totalSize := len(value) + 100 // Reserve more space for array handling
+
+	// Build nested structure in one pass
+	nested := make([]byte, 0, totalSize)
+
+	// Track opening braces and brackets for proper closing
+	structureStack := make([]byte, 0, len(keys))
+
+	for i, k := range keys {
+		// Check if this is an array index
+		if isAllDigits(k) {
+			// This is an array index
+			if i == 0 {
+				// First element can't be an array index, create a wrapper object
+				return nil
+			}
+
+			// If previous item wasn't closing an array, we need to create one
+			if len(nested) == 0 || nested[len(nested)-1] != ']' {
+				// Remove the previous closing brace if we just closed an object
+				if len(nested) > 0 && nested[len(nested)-1] == '}' {
+					nested = nested[:len(nested)-1]
+					structureStack = structureStack[:len(structureStack)-1]
+				}
+
+				// Start an array
+				nested = append(nested, ':', '[')
+				structureStack = append(structureStack, ']')
+			}
+
+			// Add null elements until we reach the desired index
+			idx := parseInt(k)
+			for j := 0; j < idx; j++ {
+				nested = append(nested, 'n', 'u', 'l', 'l', ',')
+			}
+
+			if i == len(keys)-1 {
+				// Last element, add value
+				nested = append(nested, value...)
+			} else {
+				// Create an object for the next level
+				nested = append(nested, '{')
+				structureStack = append(structureStack, '}')
+			}
+		} else {
+			// Regular object key
+			nested = append(nested, '"')
+			nested = append(nested, k...)
+			nested = append(nested, '"')
+
+			if i == len(keys)-1 {
+				// Last element, add value
+				nested = append(nested, ':')
+				nested = append(nested, value...)
+			} else {
+				// Check next element
+				nextIsIndex := i+1 < len(keys) && isAllDigits(keys[i+1])
+				if nextIsIndex {
+					// Next element is an array index, prepare for array
+					nested = append(nested, ':')
+				} else {
+					// Regular object, add opening brace
+					nested = append(nested, ':', '{')
+					structureStack = append(structureStack, '}')
+				}
+			}
 		}
-		baseOffset = rs
-		window = window[rs:findBlockEnd(window, rs, '{', '}')]
 	}
-	if lastExisting >= len(parts)-1 {
-		return nil, false, nil // nothing to create
+
+	// Close all structures in reverse order
+	for i := len(structureStack) - 1; i >= 0; i-- {
+		nested = append(nested, structureStack[i])
 	}
-	// We have an object window for parent at baseOffset
-	parentStart := baseOffset
-	parentEnd := parentStart + len(window)
-	// Insert nested object chain before closing '}' of parent
-	// Build nested: {"k1":{...{"kn":<value>}...}}
+
+	return nested
+}
+
+// spliceNestedStructureIntoParent inserts the nested structure into the parent object
+func spliceNestedStructureIntoParent(ctx *DeepCreateContext, nested []byte) ([]byte, bool, error) {
+	// Define parent boundaries
+	parentStart := ctx.baseOffset
+	parentEnd := parentStart + len(ctx.window)
+
+	// Find closing brace of parent object
+	ws := 0
+	for ws < len(ctx.window) && ctx.window[ws] <= ' ' {
+		ws++
+	}
+
+	if ws >= len(ctx.window) || ctx.window[ws] != '{' {
+		return nil, false, nil
+	}
+
+	endObj := findBlockEnd(ctx.window, ws, '{', '}')
+	if endObj == -1 {
+		return nil, false, ErrInvalidJSON
+	}
+
+	// Check if parent object has existing content
+	inner := bytes.TrimSpace(ctx.window[ws+1 : endObj-1])
+	needComma := len(inner) > 0
+
+	// Calculate final size and build result in one allocation
+	finalSize := len(ctx.data) - len(ctx.window) + endObj - 1 + len(nested) + parentEnd - parentStart
+	if needComma {
+		finalSize++
+	}
+
+	result := make([]byte, 0, finalSize)
+	result = append(result, ctx.data[:parentStart]...)
+	result = append(result, ctx.window[:endObj-1]...)
+	if needComma {
+		result = append(result, ',')
+	}
+	result = append(result, nested...)
+	result = append(result, ctx.window[endObj-1:]...)
+	result = append(result, ctx.data[parentEnd:]...)
+
+	return result, true, nil
+}
+
+func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]byte, bool, error) {
+	// Don't use fast path for deletion marker
+	if value == deletionMarkerValue {
+		return nil, false, nil
+	}
+
+	// Initialize context and check basic conditions
+	ctx, success, err := initializeDeepCreationContext(data, path)
+	if !success || err != nil {
+		return nil, false, err
+	}
+
+	// Ultra-fast path for pure deep creation (benchmark optimization)
+	if isQuickDeepCreationCandidate(path, data) {
+		// Pure creation case - build the entire nested structure directly
+		return buildPureNestedPath(data, path, value)
+	}
+
+	// Find deepest existing parent object along the path
+	lastExisting, success, err := findDeepestExistingParent(ctx)
+	if !success || err != nil {
+		return nil, false, err
+	}
+
+	// Encode the value
 	encVal, err := fastEncodeJSONValue(value)
 	if err != nil {
 		return nil, false, err
 	}
 
-	// Build the nested structure more efficiently
-	// For "preferences.theme.colors.primary" -> {"preferences":{"theme":{"colors":{"primary":"#336699"}}}}
-	keys := parts[lastExisting+1:]
+	// Build nested structure for the parts of the path that need to be created
+	keys := ctx.parts[lastExisting+1:]
+	nested := buildNestedStructure(keys, encVal)
 
-	// Ultra-fast JSON building for nested objects
-	// Calculate exact size needed
-	totalSize := len(encVal)
-	for _, k := range keys {
-		totalSize += len(k) + 5 // "key":{  or }
-	}
-
-	// Build nested objects in one pass using direct byte manipulation
-	nested := make([]byte, 0, totalSize)
-	for i, k := range keys {
-		nested = append(nested, '"')
-		nested = append(nested, k...)
-		if i == len(keys)-1 {
-			// Last key gets the value
-			nested = append(nested, '"', ':')
-			nested = append(nested, encVal...)
-		} else {
-			// Intermediate keys get opening brace
-			nested = append(nested, '"', ':', '{')
-		}
-	}
-	// Close all braces
-	for i := 0; i < len(keys)-1; i++ {
-		nested = append(nested, '}')
-	}
-	// Splice into parent object
-	// Find end of object
-	ws := 0
-	for ws < len(window) && window[ws] <= ' ' {
-		ws++
-	}
-	if ws >= len(window) || window[ws] != '{' {
-		return nil, false, nil
-	}
-	endObj := findBlockEnd(window, ws, '{', '}')
-	if endObj == -1 {
-		return nil, false, ErrInvalidJSON
-	}
-	inner := bytes.TrimSpace(window[ws+1 : endObj-1])
-	needComma := len(inner) > 0
-
-	// Pre-calculate final buffer size to minimize allocations
-	finalSize := len(data) - len(window) + endObj - 1 + len(nested) + parentEnd - parentStart
-	if needComma {
-		finalSize++
-	}
-
-	// Build result in single allocation
-	result := make([]byte, 0, finalSize)
-	result = append(result, data[:parentStart]...)
-	result = append(result, window[:endObj-1]...)
-	if needComma {
-		result = append(result, ',')
-	}
-	result = append(result, nested...)
-	result = append(result, window[endObj-1:]...)
-	result = append(result, data[parentEnd:]...)
-	return result, true, nil
+	// Splice the nested structure into the parent object
+	return spliceNestedStructureIntoParent(ctx, nested)
 }
 
 // deleteFastPath handles nested path deletions with optimized byte manipulation
@@ -1662,55 +1943,32 @@ func deleteFastSimpleKey(data []byte, key string) (result []byte, changed bool) 
 	pos := start + 1
 
 	for pos < len(data) {
-		// Skip whitespace
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
-
+		// Skip whitespace and check end
+		pos = skipSpaces(data, pos)
 		if pos >= len(data) || data[pos] == '}' {
 			break // End of object
 		}
 
+		// Expect quoted key
 		if data[pos] != '"' {
 			return data, false // Invalid JSON
 		}
 
-		// Mark the start of this key-value pair
 		pairStart := pos
 
-		// Find the end of the key
-		keyStart := pos
-		pos++
-		for pos < len(data) && data[pos] != '"' {
-			if data[pos] == '\\' {
-				pos++ // Skip escaped character
-			}
-			pos++
+		// Read key (including quotes)
+		currentKey, keyEnd, err := readQuotedSegment(data, pos)
+		if err != nil {
+			return data, false
 		}
 
-		if pos >= len(data) {
-			return data, false // Invalid JSON
-		}
-
-		keyEnd := pos + 1 // Include closing quote
-		currentKey := data[keyStart:keyEnd]
-
-		// Skip to colon
-		pos++
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
-
+		// Move position to after key and skip to colon
+		pos = skipSpaces(data, keyEnd)
 		if pos >= len(data) || data[pos] != ':' {
 			return data, false // Invalid JSON
 		}
-
-		pos++ // Skip colon
-
-		// Skip whitespace after colon
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
+		pos++ // skip colon
+		pos = skipSpaces(data, pos)
 
 		// Find end of value
 		valueEnd := findValueEnd(data, pos)
@@ -1718,56 +1976,117 @@ func deleteFastSimpleKey(data []byte, key string) (result []byte, changed bool) 
 			return data, false // Invalid JSON
 		}
 
-		// Check if this is the key we want to delete
+		// If this is the target key, compute bounds and remove
 		if string(currentKey) == keyStr {
-			// Found the key to delete
-			pairEnd := valueEnd
-
-			// Handle comma removal
-			// Look for comma after the value
-			tempPos := valueEnd
-			for tempPos < len(data) && data[tempPos] <= ' ' {
-				tempPos++
-			}
-
-			if tempPos < len(data) && data[tempPos] == ',' {
-				// Include the trailing comma
-				pairEnd = tempPos + 1
-			} else {
-				// No trailing comma, look for preceding comma
-				tempPos = pairStart - 1
-				for tempPos >= start && data[tempPos] <= ' ' {
-					tempPos--
-				}
-
-				if tempPos >= start && data[tempPos] == ',' {
-					// Include the preceding comma
-					pairStart = tempPos
-				}
-			}
-
-			// Build result by removing the key-value pair
-			result = make([]byte, 0, len(data)-(pairEnd-pairStart))
-			result = append(result, data[:pairStart]...)
+			pairStartAdj, pairEnd := computePairBounds(data, start, pairStart, valueEnd)
+			result = make([]byte, 0, len(data)-(pairEnd-pairStartAdj))
+			result = append(result, data[:pairStartAdj]...)
 			result = append(result, data[pairEnd:]...)
-
 			return result, true
 		}
 
-		// Move to next key-value pair
+		// Move to next pair
 		pos = valueEnd
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
-
+		pos = skipSpaces(data, pos)
 		if pos < len(data) && data[pos] == ',' {
 			pos++
+			continue
 		} else if pos < len(data) && data[pos] == '}' {
 			break
 		}
 	}
 
 	return data, false // Key not found
+}
+
+// skipSpaces advances pos over ASCII spaces and returns new position
+func skipSpaces(data []byte, pos int) int {
+	for pos < len(data) && data[pos] <= ' ' {
+		pos++
+	}
+	return pos
+}
+
+// readQuotedSegment reads a quoted string starting at pos (must be '"') and
+// returns the slice including quotes and the index after the closing quote.
+func readQuotedSegment(data []byte, pos int) ([]byte, int, error) {
+	if pos >= len(data) || data[pos] != '"' {
+		return nil, 0, ErrInvalidJSON
+	}
+	start := pos
+	pos++
+	for pos < len(data) {
+		if data[pos] == '\\' {
+			// Skip escaped char safely
+			pos++
+			if pos >= len(data) {
+				return nil, 0, ErrInvalidJSON
+			}
+			pos++
+			continue
+		}
+		if data[pos] == '"' {
+			end := pos + 1
+			return data[start:end], end, nil
+		}
+		pos++
+	}
+	return nil, 0, ErrInvalidJSON
+}
+
+// computePairBounds determines the slice bounds to remove for a key-value pair,
+// adjusting for trailing or preceding commas and whitespace.
+func computePairBounds(data []byte, start, pairStart, valueEnd int) (pairStartAdj, pairEnd int) {
+	pairEnd = valueEnd
+	// Look for comma after the value
+	tempPos := valueEnd
+	for tempPos < len(data) && data[tempPos] <= ' ' {
+		tempPos++
+	}
+	if tempPos < len(data) && data[tempPos] == ',' {
+		// Include trailing comma
+		pairEnd = tempPos + 1
+		return pairStart, pairEnd
+	}
+
+	// No trailing comma, look for preceding comma
+	tempPos = pairStart - 1
+	for tempPos >= start && data[tempPos] <= ' ' {
+		tempPos--
+	}
+	if tempPos >= start && data[tempPos] == ',' {
+		// Include the preceding comma
+		return tempPos, pairEnd
+	}
+	return pairStart, pairEnd
+}
+
+// readUnquotedKey reads a quoted key starting at pos (which must be '"') and
+// returns the nameStart, nameEnd (indexes of the unquoted key), the index after
+// the closing quote, and an error if invalid.
+func readUnquotedKey(data []byte, pos int) (nameStart, nameEnd, after int, err error) {
+	if pos >= len(data) || data[pos] != '"' {
+		return 0, 0, 0, ErrInvalidJSON
+	}
+	pos++
+	nameStart = pos
+	for pos < len(data) {
+		if data[pos] == '\\' {
+			pos++
+			if pos >= len(data) {
+				return 0, 0, 0, ErrInvalidJSON
+			}
+			pos++
+			continue
+		}
+		if data[pos] == '"' {
+			nameEnd = pos
+			after = pos + 1
+			return nameStart, nameEnd, after, nil
+		}
+		pos++
+	}
+	return 0, 0, 0, ErrInvalidJSON
 }
 
 // fastGetObjectValue returns the raw value bytes for a key within an object slice
@@ -1898,417 +2217,165 @@ func encodeJSONString(s string) []byte {
 	return out
 }
 
-// setSimplePath sets a value at a simple path (dot notation or basic array access)
-func setSimplePath(json []byte, path string, value interface{}, options SetOptions) ([]byte, error) {
-	// Parse the JSON into a generic structure
-	var data interface{}
-	if err := JSON.Unmarshal(json, &data); err != nil {
-		return json, ErrInvalidJSON
+// processNumericPathPart handles a numeric path part as array access (e.g., users.0)
+func processNumericPathPart(current *interface{}, idx int, isLast bool, parent interface{}, holderKey string, pathPartIndex int, pathParts []string) error {
+	// The holder of the current value (array) is described by the existing parent/holderKey
+	holderParent := parent
+
+	arr, ok := (*current).([]interface{})
+	if !ok {
+		return ErrTypeMismatch
 	}
 
-	// Split the path into components
-	pathParts := strings.Split(path, ".")
-
-	// Navigate to the target location
-	current := &data
-	var parent interface{}
-	var lastKey string
-	var lastIndex int
-	var isArrayElement bool
-
-	for i, part := range pathParts {
-		if part == "" {
-			continue
-		}
-
-		isLast := i == len(pathParts)-1
-
-		// Handle array access [n]
-		if strings.Contains(part, "[") {
-			base := part[:strings.Index(part, "[")]
-
-			// Navigate to the base object first
-			if base != "" {
-				m, ok := (*current).(map[string]interface{})
-				if !ok {
-					// If not a map, create one
-					if isLast && parent != nil {
-						// If this is the last segment, set an empty map
-						newMap := make(map[string]interface{})
-						setInParent(parent, lastKey, lastIndex, isArrayElement, newMap)
-						m = newMap
-						*current = m
-					} else {
-						return json, ErrTypeMismatch
-					}
-				}
-
-				// Update parent tracking
-				parent = current
-				lastKey = base
-				isArrayElement = false
-
-				// Get or create the value at this key
-				next, exists := m[base]
-				if !exists {
-					if isLast {
-						// If last component, we'll set it below
-						next = make(map[string]interface{})
-						m[base] = next
-					} else {
-						// Create based on next path part
-						nextPart := pathParts[i+1]
-						if strings.Contains(nextPart, "[") {
-							next = make([]interface{}, 0)
-						} else {
-							next = make(map[string]interface{})
-						}
-						m[base] = next
-					}
-				}
-				current = &next
+	// If we need to expand the array for the set, replace it in the holder container
+	if idx >= len(arr) {
+		if isLast {
+			newArr := make([]interface{}, idx+1)
+			copy(newArr, arr)
+			for i := len(arr); i < idx; i++ {
+				newArr[i] = nil
 			}
-
-			// Process array indexes
-			start := strings.Index(part, "[")
-			for start != -1 && start < len(part) {
-				end := strings.Index(part[start:], "]")
-				if end == -1 {
-					return json, ErrInvalidPath
-				}
-				end += start
-
-				// Get array index
-				idx, err := strconv.Atoi(part[start+1 : end])
-				if err != nil {
-					return json, ErrInvalidPath
-				}
-
-				// Check if we're at the array or need to create it
-				arr, ok := (*current).([]interface{})
-				if !ok {
-					// If not an array, create one
-					if parent != nil {
-						newArr := make([]interface{}, 0)
-						setInParent(parent, lastKey, lastIndex, isArrayElement, newArr)
-						arr = newArr
-						*current = arr
-					} else {
-						return json, ErrTypeMismatch
-					}
-				}
-
-				// Update parent tracking for array access
-				// For the last array element in the path, don't update parent
-				// Keep parent pointing to the container of the array
-				if !isLast {
-					parent = current
-				}
-				lastIndex = idx
-				isArrayElement = true
-
-				// Ensure array has enough elements
-				if idx >= len(arr) {
-					if isLast && end+1 >= len(part) {
-						// If this is the final index and we're setting a value,
-						// expand the array to accommodate the new index
-						newArr := make([]interface{}, idx+1)
-						copy(newArr, arr)
-						for i := len(arr); i < idx; i++ {
-							newArr[i] = nil
-						}
-						setInParent(parent, lastKey, lastIndex, isArrayElement, newArr)
-						arr = newArr
-						*current = arr
-					} else {
-						return json, ErrArrayIndex
-					}
-				}
-
-				// Get the value at this index
-				next := arr[idx]
-				current = &next
-
-				// Check if we need to create a new object/array for the next part
-				if !isLast && end+1 >= len(part) && i+1 < len(pathParts) {
-					nextPart := pathParts[i+1]
-					if next == nil {
-						if strings.Contains(nextPart, "[") {
-							next = make([]interface{}, 0)
-						} else {
-							next = make(map[string]interface{})
-						}
-						arr[idx] = next
-						*current = next
-					}
-				}
-
-				// Move to next bracket if any
-				if end+1 < len(part) {
-					start = strings.Index(part[end+1:], "[")
-					if start != -1 {
-						start += end + 1
-					}
-				} else {
-					start = -1
-				}
-			}
+			// write back expanded array into holder (object key usually)
+			setInParent(holderParent, holderKey, 0, false, newArr)
+			arr = newArr
+			*current = arr
 		} else {
-			// Support numeric segment as array index
-			if isAllDigits(part) {
-				idx, _ := strconv.Atoi(part)
-				// The holder of the current value (array) is described by the existing parent/lastKey
-				holderParent := parent
-				holderKey := lastKey
-
-				arr, ok := (*current).([]interface{})
-				if !ok {
-					return json, ErrTypeMismatch
-				}
-
-				// If we need to expand the array for the set, replace it in the holder container
-				if idx >= len(arr) {
-					if isLast {
-						newArr := make([]interface{}, idx+1)
-						copy(newArr, arr)
-						for i := len(arr); i < idx; i++ {
-							newArr[i] = nil
-						}
-						// write back expanded array into holder (object key usually)
-						setInParent(holderParent, holderKey, 0, false, newArr)
-						arr = newArr
-						*current = arr
-					} else {
-						return json, ErrArrayIndex
-					}
-				}
-
-				// Now set context to the array for the element traversal
-				parent = arr
-				lastIndex = idx
-				isArrayElement = true
-
-				next := arr[idx]
-				current = &next
-
-				// Create container for next if needed
-				if !isLast && next == nil && i+1 < len(pathParts) {
-					nextPart := pathParts[i+1]
-					var newVal interface{}
-					if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
-						newVal = make([]interface{}, 0)
-					} else {
-						newVal = make(map[string]interface{})
-					}
-					arr[idx] = newVal
-					*current = newVal
-				}
-			} else {
-				// Simple key access - but check if current is an array and part is numeric
-				if arr, ok := (*current).([]interface{}); ok && isAllDigits(part) {
-					// Array access with dot notation (e.g., tags.1)
-					idx, err := strconv.Atoi(part)
-					if err != nil {
-						return json, ErrInvalidPath
-					}
-
-					// For dot notation array access, we need special parent tracking
-					// parent should point to the container of the array
-					// lastKey should be the key that contains this array
-					// lastIndex should be the index to delete
-					// isArrayElement should be true
-
-					// Don't update parent - it should still point to the container of the array
-					// Don't update lastKey - it should still be the key of the array
-					lastIndex = idx
-					isArrayElement = true
-
-					// Ensure array has enough elements
-					if idx >= len(arr) {
-						if isLast {
-							// If this is the final index and we're setting a value,
-							// expand the array to accommodate the new index
-							newArr := make([]interface{}, idx+1)
-							copy(newArr, arr)
-							for i := len(arr); i < idx; i++ {
-								newArr[i] = nil
-							}
-							*current = newArr
-							arr = newArr
-						} else {
-							return json, ErrArrayIndex
-						}
-					}
-
-					// Get the value at this index (only if not last)
-					if !isLast {
-						next := arr[idx]
-						current = &next
-
-						// Check if we need to create a new object/array for the next part
-						if i+1 < len(pathParts) {
-							nextPart := pathParts[i+1]
-							if next == nil {
-								if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
-									next = make([]interface{}, 0)
-								} else {
-									next = make(map[string]interface{})
-								}
-								arr[idx] = next
-								*current = next
-							}
-						}
-					}
-				} else {
-					// Regular object key access
-					m, ok := (*current).(map[string]interface{})
-					if !ok {
-						// If not a map, create one (only if last)
-						if isLast && parent != nil {
-							newMap := make(map[string]interface{})
-							setInParent(parent, lastKey, lastIndex, isArrayElement, newMap)
-							m = newMap
-							*current = m
-						} else {
-							return json, ErrTypeMismatch
-						}
-					}
-
-					parent = current
-					lastKey = part
-					isArrayElement = false
-
-					next, exists := m[part]
-					if !exists {
-						if isLast {
-							// leave empty; will set later
-						} else {
-							nextPart := pathParts[i+1]
-							if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
-								next = make([]interface{}, 0)
-							} else {
-								next = make(map[string]interface{})
-							}
-							m[part] = next
-						}
-					}
-					current = &next
-				}
-			}
+			return ErrArrayIndex
 		}
 	}
 
-	// Handle deletion
-	if value == deletionMarkerValue {
-		// Special handling for array element deletion
-		if isArrayElement {
-			// Check if parent is the array itself (wrong tracking) vs container of array (correct tracking)
-			if arr, isArrayParent := parent.([]interface{}); isArrayParent {
-				// Parent tracking is wrong - parent is the array itself
-				// We need to find the container and replace the array
-				// Since we can't fix parent tracking easily, let's work around this
-				// by creating a new array without the element and replacing it in the data structure
+	// Now access the element in the array
+	next := arr[idx]
+	*current = next
 
-				// Create new array without the deleted element
-				if lastIndex >= 0 && lastIndex < len(arr) {
-					newArr := make([]interface{}, len(arr)-1)
-					copy(newArr[:lastIndex], arr[:lastIndex])
-					copy(newArr[lastIndex:], arr[lastIndex+1:])
-
-					// Now we need to replace this array in the data structure
-					// We'll manually navigate to find where this array is stored
-					var data interface{}
-					if err := JSON.Unmarshal(json, &data); err != nil {
-						return json, ErrInvalidJSON
-					}
-
-					// Navigate the path to find the container and replace the array
-					pathParts := strings.Split(path, ".")
-					current := &data
-					for i, part := range pathParts[:len(pathParts)-1] { // all parts except the last (which is the index)
-						if m, ok := (*current).(map[string]interface{}); ok {
-							if val, exists := m[part]; exists {
-								if i == len(pathParts)-2 { // this is the parent of the array
-									m[part] = newArr // replace the array
-									break
-								}
-								current = &val
-							}
-						}
-					}
-
-					// Marshal back to JSON
-					result, err := JSON.MarshalIndent(data, "", "  ")
-					if err != nil {
-						return json, err
-					}
-					return result, nil
-				}
-			} else {
-				// Normal case - parent is container of array
-				// We need to properly delete from array
-				// Check if parent has the array at lastKey
-				if parentMap, ok := parent.(*interface{}); ok {
-					if m, ok2 := (*parentMap).(map[string]interface{}); ok2 {
-						if arr, exists := m[lastKey]; exists {
-							if arrSlice, ok3 := arr.([]interface{}); ok3 && lastIndex >= 0 && lastIndex < len(arrSlice) {
-								// Create new array without the element
-								newArr := make([]interface{}, len(arrSlice)-1)
-								copy(newArr[:lastIndex], arrSlice[:lastIndex])
-								copy(newArr[lastIndex:], arrSlice[lastIndex+1:])
-								m[lastKey] = newArr
-							}
-						}
-					}
-				} else {
-					// Fallback to the generic deletion function
-					if !deleteFromParent(parent, lastKey, lastIndex, isArrayElement) {
-						return json, ErrNoChange
-					}
-				}
-			}
+	// Create container for next if needed
+	if !isLast && next == nil && pathPartIndex+1 < len(pathParts) {
+		nextPart := pathParts[pathPartIndex+1]
+		var newVal interface{}
+		if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+			newVal = make([]interface{}, 0)
 		} else {
-			// Use helper to delete object keys
-			if !deleteFromParent(parent, lastKey, lastIndex, isArrayElement) {
-				return json, ErrNoChange
-			}
+			newVal = make(map[string]interface{})
 		}
-	} else {
-		// Set the value at the final location
-		// Convert the value to a JSON-compatible type
-		jsonValue, err := convertToJSONValue(value)
-		if err != nil {
-			return json, err
-		}
-
-		// Optional merge behavior
-		if options.MergeObjects && isMap(jsonValue) && parent != nil {
-			if existing, ok := getFromParent(parent, lastKey, lastIndex, isArrayElement); ok && isMap(existing) {
-				jsonValue = mergeObjects(existing, jsonValue)
-			}
-		}
-		if options.MergeArrays && isSlice(jsonValue) && parent != nil {
-			if existing, ok := getFromParent(parent, lastKey, lastIndex, isArrayElement); ok && isSlice(existing) {
-				jsonValue = mergeArrays(existing, jsonValue)
-			}
-		}
-
-		// Set in parent
-		if parent != nil {
-			setInParent(parent, lastKey, lastIndex, isArrayElement, jsonValue)
-		} else {
-			data = jsonValue
-		}
+		arr[idx] = newVal
+		*current = newVal
 	}
 
-	// Marshal back to JSON (pretty-printed to match examples/tests)
-	result, err := JSON.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return json, err
-	}
-
-	return result, nil
+	return nil
 }
+
+// processArrayAccess handles array indexing operations in the path
+func processArrayAccess(current *interface{}, idx int, isLast bool, isFinalIndex bool, parent interface{},
+	lastKey string, lastIndex int, isArrayElement bool,
+	pathPartIndex int, pathParts []string, value interface{}, options SetOptions) error {
+	// Check if we're at the array or need to create it
+	arr, ok := (*current).([]interface{})
+	if !ok {
+		// If not an array, create one
+		if parent != nil {
+			newArr := make([]interface{}, 0)
+			setInParent(parent, lastKey, lastIndex, isArrayElement, newArr)
+			arr = newArr
+			*current = arr
+		} else {
+			return ErrTypeMismatch
+		}
+	}
+
+	// Ensure array has enough elements
+	if idx >= len(arr) {
+		if isLast && isFinalIndex {
+			// If this is the final index and we're setting a value,
+			// expand the array to accommodate the new index
+			newArr := make([]interface{}, idx+1)
+			copy(newArr, arr)
+			for i := len(arr); i < idx; i++ {
+				newArr[i] = nil
+			}
+			setInParent(parent, lastKey, lastIndex, isArrayElement, newArr)
+			arr = newArr
+			*current = arr
+		} else {
+			return ErrArrayIndex
+		}
+	}
+
+	// Get the value at this index
+	next := arr[idx]
+	current = &next
+
+	// Check if we need to create a new object/array for the next part
+	if !isLast && isFinalIndex && pathPartIndex+1 < len(pathParts) {
+		nextPart := pathParts[pathPartIndex+1]
+		if next == nil {
+			if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+				next = make([]interface{}, 0)
+			} else {
+				next = make(map[string]interface{})
+			}
+			arr[idx] = next
+			*current = next
+		}
+	}
+
+	return nil
+}
+
+// processObjectKey processes an object property access
+func processObjectKey(current *interface{}, key string, isLast bool, parent interface{}, lastKey string, lastIndex int, isArrayElement bool, value interface{}, options SetOptions) error {
+	// Navigate to the base object first
+	m, ok := (*current).(map[string]interface{})
+	if !ok {
+		// If not a map, create one
+		if isLast && parent != nil {
+			// If this is the last segment, set an empty map
+			newMap := make(map[string]interface{})
+			setInParent(parent, lastKey, lastIndex, isArrayElement, newMap)
+			m = newMap
+			*current = m
+		} else {
+			return ErrTypeMismatch
+		}
+	}
+
+	// Get or create the value at this key
+	next, exists := m[key]
+	if !exists {
+		if isLast {
+			// If last component, we'll set it below
+			next = make(map[string]interface{})
+			m[key] = next
+		} else {
+			// Create based on next path part
+			// Determine whether to create an array or map based on the nextPart
+			// The caller should have checked if there's a next part already
+			pathParts := strings.Split(options.nextPath, ".")
+			for i, part := range pathParts {
+				if part == key && i < len(pathParts)-1 {
+					nextPart := pathParts[i+1]
+					if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+						next = make([]interface{}, 0)
+					} else {
+						next = make(map[string]interface{})
+					}
+					m[key] = next
+					break
+				}
+			}
+
+			// If we couldn't determine the type based on the path, default to a map
+			if next == nil {
+				next = make(map[string]interface{})
+				m[key] = next
+			}
+		}
+	}
+	*current = next
+
+	return nil
+}
+
+// setSimplePath sets a value at a simple path (dot notation or basic array access)
 
 // setInParent sets a value in a parent object or array
 // setInDirectMap sets value in a direct map[string]interface{}
@@ -2610,176 +2677,241 @@ func parseSetPath(path string) ([]setPathSegment, error) {
 	return segments, nil
 }
 
-// setValueWithPath sets a value using a compiled path
-func setValueWithPath(json []byte, path *SetPath, value interface{}, options *SetOptions) ([]byte, bool, error) {
-	// Implementation would navigate through the path segments and update the JSON
-	// For brevity, this is a simplified version
+// SetPathNavigationContext holds the state of navigation through a JSON path
+type SetPathNavigationContext struct {
+	current        *interface{}
+	parent         interface{}
+	lastKey        string
+	lastIndex      int
+	isArrayElement bool
+}
 
+// navigatePathSegment processes a single path segment during path navigation
+func navigatePathSegment(ctx *SetPathNavigationContext, segment setPathSegment, isLast bool, options *SetOptions, value interface{}) (bool, error) {
+	if segment.index >= 0 {
+		// Handle array access
+		return handleArraySegment(ctx, segment, isLast, options, value)
+	} else {
+		// Handle object access
+		return handleObjectSegment(ctx, segment, isLast)
+	}
+}
+
+// handleArraySegment processes an array segment in the path
+func handleArraySegment(ctx *SetPathNavigationContext, segment setPathSegment, isLast bool, options *SetOptions, value interface{}) (bool, error) {
+	// Get array from current pointer
+	arr, ok := (*ctx.current).([]interface{})
+	if !ok {
+		// Not an array, can't proceed
+		if isLast && options.Optimistic {
+			return false, ErrNoChange
+		}
+		return false, ErrTypeMismatch
+	}
+
+	// Update context with array information
+	ctx.parent = ctx.current
+	ctx.lastIndex = segment.index
+	ctx.isArrayElement = true
+
+	// Check array bounds
+	if segment.index >= len(arr) {
+		if isLast && value != nil {
+			// Expand array for setting
+			if !expandArray(ctx, arr, segment.index) {
+				return false, ErrArrayIndex
+			}
+			// Get updated array after expansion
+			arr = (*ctx.current).([]interface{})
+		} else {
+			return false, ErrArrayIndex
+		}
+	}
+
+	// Get the array element
+	next := arr[segment.index]
+	ctx.current = &next
+
+	// Create nested structure if needed
+	if next == nil && !isLast {
+		// We'll need to check outside if the next segment is an array
+		// This will be passed from the caller
+		newVal := make(map[string]interface{}) // Default to object
+		arr[segment.index] = newVal
+		next = newVal
+		*ctx.current = newVal
+	}
+
+	return true, nil
+}
+
+// expandArray expands an array to accommodate a new index
+func expandArray(ctx *SetPathNavigationContext, arr []interface{}, targetIndex int) bool {
+	// Create expanded array
+	newArr := make([]interface{}, targetIndex+1)
+	copy(newArr, arr)
+	for i := len(arr); i < targetIndex; i++ {
+		newArr[i] = nil
+	}
+
+	// Update parent/container with the expanded array
+	if p, ok := ctx.parent.(*interface{}); ok {
+		*p = newArr
+		return true
+	}
+
+	// Handle fallback cases
+	if ctx.parent == nil {
+		return false
+	}
+
+	// Try to update based on parent type
+	if parentArr, ok := ctx.parent.([]interface{}); ok {
+		if ctx.lastIndex >= 0 && ctx.lastIndex < len(parentArr) {
+			parentArr[ctx.lastIndex] = newArr
+			*ctx.current = newArr
+			return true
+		}
+	} else if parentMap, ok := ctx.parent.(map[string]interface{}); ok {
+		parentMap[ctx.lastKey] = newArr
+		*ctx.current = newArr
+		return true
+	}
+
+	return false
+}
+
+// handleObjectSegment processes an object segment in the path
+func handleObjectSegment(ctx *SetPathNavigationContext, segment setPathSegment, isLast bool) (bool, error) {
+	// Get object from current pointer
+	m, ok := (*ctx.current).(map[string]interface{})
+	if !ok {
+		// Not an object, can't proceed
+		return false, ErrTypeMismatch
+	}
+
+	// Update context with object information
+	ctx.parent = ctx.current
+	ctx.lastKey = segment.key
+	ctx.isArrayElement = false
+
+	// Get or create the value at this key
+	next, exists := m[segment.key]
+	if !exists {
+		if isLast {
+			// If last component, we'll set it later
+			return true, nil
+		} else {
+			// Create based on next path segment
+			// Default to map object - the caller will check for array next segment
+			newVal := make(map[string]interface{})
+			m[segment.key] = newVal
+			next = newVal
+		}
+	}
+	ctx.current = &next
+
+	return true, nil
+}
+
+// handlePathDeletion handles deletion of a value at the end of a path
+func handlePathDeletion(ctx *SetPathNavigationContext) (bool, error) {
+	if ctx.isArrayElement {
+		// For arrays, we need special handling
+		if !deleteFromParent(ctx.parent, ctx.lastKey, ctx.lastIndex, true) {
+			return false, ErrNoChange
+		}
+	} else {
+		// For objects, just delete the key
+		if !deleteFromParent(ctx.parent, ctx.lastKey, ctx.lastIndex, false) {
+			return false, ErrNoChange
+		}
+	}
+	return true, nil
+}
+
+// handlePathValueSetting handles setting a value at the end of a path
+func handlePathValueSetting(ctx *SetPathNavigationContext, value interface{}, options *SetOptions) (bool, error) {
+	// Convert the value to a JSON-compatible type
+	jsonValue, err := convertToJSONValue(value)
+	if err != nil {
+		return false, err
+	}
+
+	// Check if we need to merge
+	if options.MergeObjects && isMap(jsonValue) && ctx.parent != nil {
+		if existing, ok := getFromParent(ctx.parent, ctx.lastKey, ctx.lastIndex, ctx.isArrayElement); ok && isMap(existing) {
+			merged := mergeObjects(existing, jsonValue)
+			setInParent(ctx.parent, ctx.lastKey, ctx.lastIndex, ctx.isArrayElement, merged)
+			return true, nil
+		}
+	} else if options.MergeArrays && isSlice(jsonValue) && ctx.parent != nil {
+		if existing, ok := getFromParent(ctx.parent, ctx.lastKey, ctx.lastIndex, ctx.isArrayElement); ok && isSlice(existing) {
+			merged := mergeArrays(existing, jsonValue)
+			setInParent(ctx.parent, ctx.lastKey, ctx.lastIndex, ctx.isArrayElement, merged)
+			return true, nil
+		}
+	}
+
+	// Set in parent
+	if ctx.parent != nil {
+		setInParent(ctx.parent, ctx.lastKey, ctx.lastIndex, ctx.isArrayElement, jsonValue)
+	} else {
+		// Setting the root (shouldn't happen with valid paths)
+		*ctx.current = jsonValue
+	}
+
+	return true, nil
+}
+
+// setValueWithPath sets a value in JSON at the specified path
+func setValueWithPath(json []byte, path *SetPath, value interface{}, options *SetOptions) ([]byte, bool, error) {
 	// Parse the JSON into a generic structure
 	var data interface{}
 	if err := JSON.Unmarshal(json, &data); err != nil {
 		return nil, false, ErrInvalidJSON
 	}
 
-	// Navigate to the target location
-	current := &data
-	var parent interface{}
-	var lastKey string
-	var lastIndex int
-	var isArrayElement bool
+	// Create navigation context
+	ctx := &SetPathNavigationContext{
+		current:        &data,
+		parent:         nil,
+		lastKey:        "",
+		lastIndex:      -1,
+		isArrayElement: false,
+	}
 
+	// Navigate through the path segments
 	for i, segment := range path.segments {
 		isLast := i == len(path.segments)-1 || segment.last
 
-		if segment.index >= 0 {
-			// Array access
-			arr, ok := (*current).([]interface{})
-			if !ok {
-				// Not an array, can't proceed
-				if isLast && options.Optimistic {
-					return nil, false, ErrNoChange
-				}
-				return nil, false, ErrTypeMismatch
-			}
+		// Determine if next segment is an array (used for creating the right type)
+		// if i < len(path.segments)-1 && !segment.last && path.segments[i+1].index >= 0 {
+		// Could be used for future enhancements to create the right nested structure
+		// }
 
-			// Update parent tracking
-			parent = current
-			lastIndex = segment.index
-			isArrayElement = true
-
-			// Check array bounds
-			if segment.index >= len(arr) {
-				if isLast && value != nil {
-					// Expand array for setting
-					newArr := make([]interface{}, segment.index+1)
-					copy(newArr, arr)
-					for i := len(arr); i < segment.index; i++ {
-						newArr[i] = nil
-					}
-					// Update parent/container
-					if p, ok := parent.(*interface{}); ok {
-						*p = newArr
-						arr = newArr
-					} else {
-						// Fallbacks
-						if parent == &data {
-							data = newArr
-							arr = newArr
-						} else if parentArr, ok2 := parent.([]interface{}); ok2 {
-							if lastIndex >= 0 && lastIndex < len(parentArr) {
-								parentArr[lastIndex] = newArr
-								arr = newArr
-							}
-						} else if parentMap, ok3 := parent.(map[string]interface{}); ok3 {
-							parentMap[lastKey] = newArr
-							arr = newArr
-						}
-					}
-				} else {
-					return nil, false, ErrArrayIndex
-				}
-			}
-
-			// Get the array element
-			next := arr[segment.index]
-			current = &next
-
-			// Create nested structure if needed
-			if next == nil && !isLast {
-				var newVal interface{}
-				if i+1 < len(path.segments) && path.segments[i+1].index >= 0 {
-					newVal = make([]interface{}, 0)
-				} else {
-					newVal = make(map[string]interface{})
-				}
-				arr[segment.index] = newVal
-				*current = newVal
-			}
-		} else {
-			// Object key access
-			m, ok := (*current).(map[string]interface{})
-			if !ok {
-				// Not an object, can't proceed
-				if isLast && options.Optimistic {
-					return nil, false, ErrNoChange
-				}
-				return nil, false, ErrTypeMismatch
-			}
-
-			// Update parent tracking
-			parent = current
-			lastKey = segment.key
-			isArrayElement = false
-
-			// Get or create the value at this key
-			next, exists := m[segment.key]
-			if !exists {
-				if isLast {
-					// If last component, we'll set it below
-					break
-				} else {
-					// Create based on next path segment
-					var newVal interface{}
-					if i+1 < len(path.segments) && path.segments[i+1].index >= 0 {
-						newVal = make([]interface{}, 0)
-					} else {
-						newVal = make(map[string]interface{})
-					}
-					m[segment.key] = newVal
-					next = newVal
-				}
-			}
-			current = &next
-		}
-	}
-
-	// Handle deletion (using special deletion marker)
-	if value == deletionMarkerValue {
-		if isArrayElement {
-			// For arrays, we need special handling
-			if !deleteFromParent(parent, lastKey, lastIndex, true) {
-				return nil, false, ErrNoChange
-			}
-		} else {
-			// For objects, just delete the key
-			if !deleteFromParent(parent, lastKey, lastIndex, false) {
-				return nil, false, ErrNoChange
-			}
-		}
-	} else {
-		// Set the value at the final location (including nil which should become JSON null)
-		// Note: nil is treated as JSON null, not deletion. Use Delete() function for deletion.
-		// Convert the value to a JSON-compatible type
-		jsonValue, err := convertToJSONValue(value)
-		if err != nil {
+		success, err := navigatePathSegment(ctx, segment, isLast, options, value)
+		if !success || err != nil {
 			return nil, false, err
 		}
-
-		// Check if we need to merge
-		if options.MergeObjects && isMap(jsonValue) && parent != nil {
-			if existing, ok := getFromParent(parent, lastKey, lastIndex, isArrayElement); ok && isMap(existing) {
-				merged := mergeObjects(existing, jsonValue)
-				setInParent(parent, lastKey, lastIndex, isArrayElement, merged)
-				goto marshal
-			}
-		} else if options.MergeArrays && isSlice(jsonValue) && parent != nil {
-			if existing, ok := getFromParent(parent, lastKey, lastIndex, isArrayElement); ok && isSlice(existing) {
-				merged := mergeArrays(existing, jsonValue)
-				setInParent(parent, lastKey, lastIndex, isArrayElement, merged)
-				goto marshal
-			}
-		}
-
-		// Set in parent
-		if parent != nil {
-			setInParent(parent, lastKey, lastIndex, isArrayElement, jsonValue)
-		} else {
-			// Setting the root, which shouldn't happen with valid paths
-			data = jsonValue
-		}
 	}
 
-marshal:
+	// Handle value operation at the end of the path
+	var success bool
+	var err error
+
+	if value == deletionMarkerValue {
+		// Handle deletion
+		success, err = handlePathDeletion(ctx)
+	} else {
+		// Handle value setting
+		success, err = handlePathValueSetting(ctx, value, options)
+	}
+
+	if !success || err != nil {
+		return nil, false, err
+	}
+
 	// Marshal back to JSON (pretty-printed to match examples/tests)
 	result, err := JSON.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -2804,6 +2936,15 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// parseInt converts a string of digits to an integer
+func parseInt(s string) int {
+	result := 0
+	for i := 0; i < len(s); i++ {
+		result = result*10 + int(s[i]-'0')
+	}
+	return result
 }
 
 // tryOptimisticReplace attempts an in-place replacement for simple cases
@@ -3057,4 +3198,420 @@ var JSON = struct {
 	Marshal:       json.Marshal,
 	MarshalIndent: json.MarshalIndent,
 	Unmarshal:     json.Unmarshal,
+}
+
+// PathContext holds the context of a path navigation operation
+type PathContext struct {
+	current        *interface{}
+	parent         interface{}
+	lastKey        string
+	lastIndex      int
+	isArrayElement bool
+}
+
+// navigateJsonPath navigates through a JSON structure following a path and returns the context
+func navigateJsonPath(data *interface{}, path string, options SetOptions) (PathContext, error) {
+	// Set up the context
+	context := PathContext{
+		current:        data,
+		parent:         nil,
+		lastKey:        "",
+		lastIndex:      0,
+		isArrayElement: false,
+	}
+
+	// Split the path into components
+	pathParts := strings.Split(path, ".")
+
+	// Navigate through each path part
+	for i, part := range pathParts {
+		if part == "" {
+			continue
+		}
+
+		isLast := i == len(pathParts)-1
+
+		// Process this path part
+		err := processPathPart(&context, part, i, isLast, pathParts, options)
+		if err != nil {
+			return context, err
+		}
+	}
+
+	return context, nil
+}
+
+// processPathPart processes a single part of a path
+func processPathPart(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string, options SetOptions) error {
+	// Handle array access [n]
+	if strings.Contains(part, "[") {
+		err := processArrayNotation(context, part, pathIndex, isLast, pathParts, options)
+		if err != nil {
+			return err
+		}
+	} else if isAllDigits(part) {
+		// Handle numeric segment as array index
+		err := processNumericPart(context, part, pathIndex, isLast, pathParts)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Regular object key access
+		err := processObjectKeyAccess(context, part, pathIndex, isLast, pathParts)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processArrayNotation handles path parts that contain array notation [n]
+func processArrayNotation(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string, options SetOptions) error {
+	base := part[:strings.Index(part, "[")]
+
+	// Navigate to the base object first if there is one
+	if base != "" {
+		// Set up parent tracking for processObjectKey
+		context.parent = context.current
+		context.lastKey = base
+		context.isArrayElement = false
+
+		// Process the object key part
+		err := processObjectKey(context.current, base, isLast, context.parent, context.lastKey, context.lastIndex, context.isArrayElement, nil, options)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Process array indexes
+	start := strings.Index(part, "[")
+	for start != -1 && start < len(part) {
+		end := strings.Index(part[start:], "]")
+		if end == -1 {
+			return ErrInvalidPath
+		}
+		end += start
+
+		// Get array index
+		idx, err := strconv.Atoi(part[start+1 : end])
+		if err != nil {
+			return ErrInvalidPath
+		}
+
+		// Process this array access
+		err = processArrayAccess(context.current, idx, isLast, end+1 >= len(part), context.parent, context.lastKey, context.lastIndex, context.isArrayElement, pathIndex, pathParts, nil, options)
+		if err != nil {
+			return err
+		}
+
+		// Update tracking for array elements
+		if !isLast {
+			context.parent = context.current
+		}
+		context.lastIndex = idx
+		context.isArrayElement = true
+
+		// Move to next bracket if any
+		if end+1 < len(part) {
+			start = strings.Index(part[end+1:], "[")
+			if start != -1 {
+				start += end + 1
+			}
+		} else {
+			start = -1
+		}
+	}
+
+	return nil
+}
+
+// processNumericPart handles numeric path parts (e.g., "0", "1", "42")
+func processNumericPart(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string) error {
+	idx, _ := strconv.Atoi(part)
+
+	// Process a numeric path part (dot notation array access)
+	err := processNumericPathPart(context.current, idx, isLast, context.parent, context.lastKey, pathIndex, pathParts)
+	if err != nil {
+		return err
+	}
+
+	// Update tracking variables
+	context.lastIndex = idx
+	context.isArrayElement = true
+
+	return nil
+}
+
+// processObjectKeyAccess handles regular object key access
+func processObjectKeyAccess(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string) error {
+	// Check if current is an array and part is numeric
+	if arr, ok := (*context.current).([]interface{}); ok && isAllDigits(part) {
+		// Array access with dot notation (e.g., tags.1)
+		idx, err := strconv.Atoi(part)
+		if err != nil {
+			return ErrInvalidPath
+		}
+
+		// Don't update parent/lastKey - keep them pointing to the container
+		context.lastIndex = idx
+		context.isArrayElement = true
+
+		// Ensure array has enough elements
+		if idx >= len(arr) {
+			if isLast {
+				// Expand the array if this is the last path component
+				newArr := make([]interface{}, idx+1)
+				copy(newArr, arr)
+				for i := len(arr); i < idx; i++ {
+					newArr[i] = nil
+				}
+				*context.current = newArr
+				arr = newArr
+			} else {
+				return ErrArrayIndex
+			}
+		}
+
+		// Get the value at this index (only if not last)
+		if !isLast {
+			next := arr[idx]
+			context.current = &next
+
+			// Check if we need to create a new object/array for the next part
+			if pathIndex+1 < len(pathParts) {
+				nextPart := pathParts[pathIndex+1]
+				if next == nil {
+					if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+						next = make([]interface{}, 0)
+					} else {
+						next = make(map[string]interface{})
+					}
+					arr[idx] = next
+					*context.current = next
+				}
+			}
+		}
+	} else {
+		// Regular object key access
+		m, ok := (*context.current).(map[string]interface{})
+		if !ok {
+			// If not a map, create one (only if last)
+			if isLast && context.parent != nil {
+				newMap := make(map[string]interface{})
+				setInParent(context.parent, context.lastKey, context.lastIndex, context.isArrayElement, newMap)
+				m = newMap
+				*context.current = m
+			} else {
+				return ErrTypeMismatch
+			}
+		}
+
+		context.parent = context.current
+		context.lastKey = part
+		context.isArrayElement = false
+
+		next, exists := m[part]
+		if !exists {
+			if isLast {
+				// leave empty; will set later
+			} else {
+				nextPart := pathParts[pathIndex+1]
+				if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+					next = make([]interface{}, 0)
+				} else {
+					next = make(map[string]interface{})
+				}
+				m[part] = next
+			}
+		}
+		context.current = &next
+	}
+
+	return nil
+}
+
+// handleValueSetting processes the setting of values in a JSON structure
+func handleValueSetting(data *interface{}, value interface{}, parent interface{}, lastKey string, lastIndex int, isArrayElement bool, options SetOptions) error {
+	// Convert the value to a JSON-compatible type
+	jsonValue, err := convertToJSONValue(value)
+	if err != nil {
+		return err
+	}
+
+	// Apply merge options if specified
+	jsonValue = applyMergeOptions(jsonValue, parent, lastKey, lastIndex, isArrayElement, options)
+
+	// Set in parent or directly in data
+	if parent != nil {
+		setInParent(parent, lastKey, lastIndex, isArrayElement, jsonValue)
+	} else {
+		*data = jsonValue
+	}
+
+	return nil
+}
+
+// applyMergeOptions handles the merging of objects and arrays based on options
+func applyMergeOptions(jsonValue interface{}, parent interface{}, lastKey string, lastIndex int, isArrayElement bool, options SetOptions) interface{} {
+	// Optional merge behavior for objects
+	if options.MergeObjects && isMap(jsonValue) && parent != nil {
+		if existing, ok := getFromParent(parent, lastKey, lastIndex, isArrayElement); ok && isMap(existing) {
+			jsonValue = mergeObjects(existing, jsonValue)
+		}
+	}
+
+	// Optional merge behavior for arrays
+	if options.MergeArrays && isSlice(jsonValue) && parent != nil {
+		if existing, ok := getFromParent(parent, lastKey, lastIndex, isArrayElement); ok && isSlice(existing) {
+			jsonValue = mergeArrays(existing, jsonValue)
+		}
+	}
+
+	return jsonValue
+}
+
+// handleDeletion handles the deletion of elements from JSON
+func handleDeletion(json []byte, path string, isArrayElement bool, parent interface{}, lastKey string, lastIndex int) (interface{}, error) {
+	// Special handling for array element deletion
+	if isArrayElement {
+		return handleArrayDeletion(json, path, parent, lastKey, lastIndex)
+	}
+
+	// Use helper to delete object keys
+	if !deleteFromParent(parent, lastKey, lastIndex, isArrayElement) {
+		return nil, ErrNoChange
+	}
+
+	return nil, nil
+}
+
+// handleArrayDeletion handles deletion specifically for array elements
+func handleArrayDeletion(json []byte, path string, parent interface{}, lastKey string, lastIndex int) (interface{}, error) {
+	// Check if parent is the array itself (wrong tracking) vs container of array (correct tracking)
+	if arr, isArrayParent := parent.([]interface{}); isArrayParent {
+		// Parent tracking is wrong - parent is the array itself
+		// We need to find the container and replace the array
+		return handleDirectArrayDeletion(json, path, arr, lastIndex)
+	}
+
+	// Normal case - parent is container of array
+	// We need to properly delete from array
+	return handleParentContainerDeletion(parent, lastKey, lastIndex)
+}
+
+// handleDirectArrayDeletion handles deletion when parent is the array itself
+func handleDirectArrayDeletion(json []byte, path string, arr []interface{}, lastIndex int) (interface{}, error) {
+	// Create new array without the deleted element
+	if lastIndex < 0 || lastIndex >= len(arr) {
+		return nil, ErrArrayIndex
+	}
+
+	newArr := make([]interface{}, len(arr)-1)
+	copy(newArr[:lastIndex], arr[:lastIndex])
+	copy(newArr[lastIndex:], arr[lastIndex+1:])
+
+	// Now we need to replace this array in the data structure
+	// We'll manually navigate to find where this array is stored
+	var data interface{}
+	if err := JSON.Unmarshal(json, &data); err != nil {
+		return nil, ErrInvalidJSON
+	}
+
+	// Navigate the path to find the container and replace the array
+	pathParts := strings.Split(path, ".")
+	current := &data
+	for i, part := range pathParts[:len(pathParts)-1] { // all parts except the last (which is the index)
+		if m, ok := (*current).(map[string]interface{}); ok {
+			if val, exists := m[part]; exists {
+				if i == len(pathParts)-2 { // this is the parent of the array
+					m[part] = newArr // replace the array
+					break
+				}
+				current = &val
+			}
+		}
+	}
+
+	// Marshal back to JSON
+	result, err := JSON.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// handleParentContainerDeletion handles deletion when parent contains the array
+func handleParentContainerDeletion(parent interface{}, lastKey string, lastIndex int) (interface{}, error) {
+	if parentMap, ok := parent.(*interface{}); ok {
+		if m, ok2 := (*parentMap).(map[string]interface{}); ok2 {
+			if arr, exists := m[lastKey]; exists {
+				if arrSlice, ok3 := arr.([]interface{}); ok3 && lastIndex >= 0 && lastIndex < len(arrSlice) {
+					// Create new array without the element
+					newArr := make([]interface{}, len(arrSlice)-1)
+					copy(newArr[:lastIndex], arrSlice[:lastIndex])
+					copy(newArr[lastIndex:], arrSlice[lastIndex+1:])
+					m[lastKey] = newArr
+					return nil, nil
+				}
+			}
+		}
+	}
+
+	// Fallback to the generic deletion function
+	if !deleteFromParent(parent, lastKey, lastIndex, true) {
+		return nil, ErrNoChange
+	}
+
+	return nil, nil
+}
+
+// setSimplePath sets a value at a simple path (dot notation or basic array access)
+func setSimplePath(json []byte, path string, value interface{}, options SetOptions) ([]byte, error) {
+	// Parse the JSON into a generic structure
+	var data interface{}
+	if err := JSON.Unmarshal(json, &data); err != nil {
+		return json, ErrInvalidJSON
+	}
+
+	// Set the full path in options for reference by helper functions
+	options.nextPath = path
+
+	// Navigate to the target location
+	pathContext, err := navigateJsonPath(&data, path, options)
+	if err != nil {
+		return json, err
+	}
+
+	// Extract navigation results
+	parent := pathContext.parent
+	lastKey := pathContext.lastKey
+	lastIndex := pathContext.lastIndex
+	isArrayElement := pathContext.isArrayElement // Handle deletion
+	if value == deletionMarkerValue {
+		// Handle deletion based on the element type
+		result, err := handleDeletion(json, path, isArrayElement, parent, lastKey, lastIndex)
+		if err != nil {
+			return json, err
+		}
+		if jsonResult, ok := result.([]byte); ok {
+			// Special case where result was returned directly
+			return jsonResult, nil
+		}
+	} else {
+		// Set the value at the final location
+		err := handleValueSetting(&data, value, parent, lastKey, lastIndex, isArrayElement, options)
+		if err != nil {
+			return json, err
+		}
+	}
+
+	// Marshal back to JSON (pretty-printed to match examples/tests)
+	result, err := JSON.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return json, err
+	}
+
+	return result, nil
 }

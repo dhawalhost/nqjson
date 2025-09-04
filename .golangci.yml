@@ -138,10 +138,11 @@ issues:
     # Exclude known linters from partially hard-to-fix issues related to unsafe
     # Removed typecheck linter reference as it's no longer a standalone linter
 
-    # Exclude unsafe usage warnings - we need them for performance
+    # Exclude unsafe usage warnings - we need them for performance optimization
     - linters:
         - gosec
-      text: "G103:"
+      text: "G103: Use of unsafe calls should be audited"
+
 
     # Exclude some staticcheck messages
     - linters:
