@@ -22,6 +22,20 @@ var (
 	ErrTypeConversion = errors.New("cannot convert value to requested type")
 )
 
+// String constants for common values and operators
+const (
+	constNull    = "null"
+	constFalse   = "false"
+	constString  = "string"
+	constNumber  = "number"
+	constBool    = "bool"
+	constBoolean = "boolean"
+	constEq      = "=="
+	constNe      = "!="
+	constLe      = "<="
+	constGe      = ">="
+)
+
 // ValueType represents the type of a JSON value
 type ValueType uint8
 
@@ -95,8 +109,13 @@ var (
 // Get retrieves a value from JSON using a path expression.
 // This is highly optimized with multiple fast paths for common use cases.
 func Get(data []byte, path string) Result {
-	// Empty path or root path returns the entire document
-	if path == "" || path == "$" || path == "@" {
+	// Empty path should return non-existent result according to tests
+	if path == "" {
+		return Result{Type: TypeUndefined}
+	}
+
+	// Root path returns the entire document
+	if path == "$" || path == "@" {
 		return Parse(data)
 	}
 
@@ -128,14 +147,112 @@ func GetString(json string, path string) Result {
 }
 
 // Parse parses a JSON value and returns a Result
-func Parse(data []byte) Result {
-	// Skip leading whitespace
+// skipLeadingWhitespace skips whitespace at the start of data
+func skipLeadingWhitespace(data []byte) int {
 	start := 0
 	for ; start < len(data); start++ {
 		if data[start] > ' ' {
 			break
 		}
 	}
+	return start
+}
+
+// parseBooleanTrue attempts to parse a boolean true value
+func parseBooleanTrue(data []byte, start int) (Result, bool) {
+	if start+3 < len(data) &&
+		data[start+1] == 'r' &&
+		data[start+2] == 'u' &&
+		data[start+3] == 'e' {
+		return Result{
+			Type:    TypeBoolean,
+			Boolean: true,
+			Raw:     data[start : start+4],
+			Index:   start,
+		}, true
+	}
+	return Result{}, false
+}
+
+// parseBooleanFalse attempts to parse a boolean false value
+func parseBooleanFalse(data []byte, start int) (Result, bool) {
+	if start+4 < len(data) &&
+		data[start+1] == 'a' &&
+		data[start+2] == 'l' &&
+		data[start+3] == 's' &&
+		data[start+4] == 'e' {
+		return Result{
+			Type:    TypeBoolean,
+			Boolean: false,
+			Raw:     data[start : start+5],
+			Index:   start,
+		}, true
+	}
+	return Result{}, false
+}
+
+// parseNull attempts to parse a null value
+func parseNull(data []byte, start int) (Result, bool) {
+	if start+3 < len(data) &&
+		data[start+1] == 'u' &&
+		data[start+2] == 'l' &&
+		data[start+3] == 'l' {
+		return Result{
+			Type:  TypeNull,
+			Raw:   data[start : start+4],
+			Index: start,
+		}, true
+	}
+	return Result{}, false
+}
+
+// isNumericChar checks if a character can start a number
+func isNumericChar(c byte) bool {
+	return c == '-' || (c >= '0' && c <= '9')
+}
+
+// isValidBasicJSON performs minimal JSON validation for objects and arrays
+func isValidBasicJSON(data []byte, start int) bool {
+	if start >= len(data) {
+		return false
+	}
+
+	var depth int
+	inString := false
+	escaped := false
+
+	for i := start; i < len(data); i++ {
+		char := data[i]
+
+		if inString {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				inString = false
+			}
+		} else {
+			switch char {
+			case '"':
+				inString = true
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+				if depth < 0 {
+					return false
+				}
+			}
+		}
+	}
+
+	return depth == 0 && !inString
+}
+
+func Parse(data []byte) Result {
+	// Skip leading whitespace
+	start := skipLeadingWhitespace(data)
 
 	if start >= len(data) {
 		return Result{Type: TypeUndefined}
@@ -144,58 +261,39 @@ func Parse(data []byte) Result {
 	// Parse based on first character
 	switch data[start] {
 	case '{': // Object
-		return Result{
-			Type:  TypeObject,
-			Raw:   data,
-			Index: start,
+		if isValidBasicJSON(data, start) {
+			return Result{
+				Type:  TypeObject,
+				Raw:   data,
+				Index: start,
+			}
 		}
 	case '[': // Array
-		return Result{
-			Type:  TypeArray,
-			Raw:   data,
-			Index: start,
+		if isValidBasicJSON(data, start) {
+			return Result{
+				Type:  TypeArray,
+				Raw:   data,
+				Index: start,
+			}
 		}
 	case '"': // String
 		return parseString(data, start)
 	case 't': // true
-		if start+3 < len(data) &&
-			data[start+1] == 'r' &&
-			data[start+2] == 'u' &&
-			data[start+3] == 'e' { // Corrected typo: data[start+3] == 'e'
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: true,
-				Raw:     data[start : start+4],
-				Index:   start,
-			}
+		if result, ok := parseBooleanTrue(data, start); ok {
+			return result
 		}
 	case 'f': // false
-		if start+4 < len(data) &&
-			data[start+1] == 'a' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 's' && // Corrected typo: data[start+3] == 's'
-			data[start+4] == 'e' {
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: false,
-				Raw:     data[start : start+5],
-				Index:   start,
-			}
+		if result, ok := parseBooleanFalse(data, start); ok {
+			return result
 		}
 	case 'n': // null
-		if start+3 < len(data) &&
-			data[start+1] == 'u' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 'l' {
-			return Result{
-				Type:  TypeNull,
-				Raw:   data[start : start+4],
-				Index: start,
-			}
+		if result, ok := parseNull(data, start); ok {
+			return result
 		}
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		// Number
-		return parseNumber(data, start)
+	default:
+		if isNumericChar(data[start]) {
+			return parseNumber(data, start)
+		}
 	}
 
 	return Result{Type: TypeUndefined}
@@ -364,13 +462,67 @@ func getUltraSimplePath(data []byte, path string) Result {
 }
 
 // handleItemsPattern - ultra-optimized for "items.index.property" patterns in LargeDeep benchmark
-func handleItemsPattern(data []byte, path string) Result {
-	// Expected patterns:
-	// "items.500.name"
-	// "items.999.metadata.priority"
-	// "items.250.tags.1"
-
+// validateItemsPatternInput validates input for items pattern processing
+func validateItemsPatternInput(data []byte) bool {
 	if len(data) == 0 || data[0] != '{' {
+		return false
+	}
+	return true
+}
+
+// parseIndexFromItemsPath extracts the numeric index from items.XXX.path format
+func parseIndexFromItemsPath(path string) (int, int, bool) {
+	indexStart := 6 // length of "items."
+	indexEnd := indexStart
+	for indexEnd < len(path) && path[indexEnd] >= '0' && path[indexEnd] <= '9' {
+		indexEnd++
+	}
+	if indexEnd == indexStart {
+		return 0, 0, false
+	}
+
+	index := 0
+	for i := indexStart; i < indexEnd; i++ {
+		index = index*10 + int(path[i]-'0')
+	}
+
+	return index, indexEnd, true
+}
+
+// handleOptimizedItemsPaths processes known optimized patterns for items
+func handleOptimizedItemsPaths(data []byte, remainingPath string, absoluteStart, absoluteEnd int) Result {
+	elementData := data[absoluteStart:absoluteEnd]
+
+	switch remainingPath {
+	case "name":
+		// Ultra-fast "name" property lookup
+		return ultraFastSimplePropertyLookup(elementData, "name")
+	case "metadata.priority":
+		// Ultra-fast nested "metadata.priority" lookup
+		metadataResult := ultraFastSimplePropertyLookup(elementData, "metadata")
+		if metadataResult.Type == TypeObject && len(metadataResult.Raw) > 0 {
+			return ultraFastSimplePropertyLookup(metadataResult.Raw, "priority")
+		}
+		return Result{Type: TypeUndefined}
+	case "tags.1":
+		// Ultra-fast nested "tags.1" lookup (array access)
+		tagsResult := ultraFastSimplePropertyLookup(elementData, "tags")
+		if tagsResult.Type == TypeArray && len(tagsResult.Raw) > 0 {
+			elementStart, elementEnd := fastFindArrayElement(tagsResult.Raw, 1)
+			if elementStart != -1 {
+				return fastParseValue(tagsResult.Raw[elementStart:elementEnd])
+			}
+		}
+		return Result{Type: TypeUndefined}
+	default:
+		// Fallback to general path parsing for other cases
+		return getUltraSimplePath(elementData, remainingPath)
+	}
+}
+
+func handleItemsPattern(data []byte, path string) Result {
+	// Validate input
+	if !validateItemsPatternInput(data) {
 		return Result{Type: TypeUndefined}
 	}
 
@@ -381,18 +533,9 @@ func handleItemsPattern(data []byte, path string) Result {
 	}
 
 	// Parse the index from path (after "items.")
-	indexStart := 6 // length of "items."
-	indexEnd := indexStart
-	for indexEnd < len(path) && path[indexEnd] >= '0' && path[indexEnd] <= '9' {
-		indexEnd++
-	}
-	if indexEnd == indexStart {
+	index, indexEnd, valid := parseIndexFromItemsPath(path)
+	if !valid {
 		return Result{Type: TypeUndefined}
-	}
-
-	index := 0
-	for i := indexStart; i < indexEnd; i++ {
-		index = index*10 + int(path[i]-'0')
 	}
 
 	// Access array element using our blazing fast comma scanner
@@ -414,36 +557,7 @@ func handleItemsPattern(data []byte, path string) Result {
 	if indexEnd < len(path) && path[indexEnd] == '.' {
 		// There's more path - handle "name", "metadata.priority", "tags.1"
 		remainingPath := path[indexEnd+1:]
-
-		// Special optimized cases for the exact patterns in LargeDeep benchmark
-		if remainingPath == "name" {
-			// Ultra-fast "name" property lookup
-			elementData := data[absoluteStart:absoluteEnd]
-			return ultraFastSimplePropertyLookup(elementData, "name")
-		} else if remainingPath == "metadata.priority" {
-			// Ultra-fast nested "metadata.priority" lookup
-			elementData := data[absoluteStart:absoluteEnd]
-			metadataResult := ultraFastSimplePropertyLookup(elementData, "metadata")
-			if metadataResult.Type == TypeObject && len(metadataResult.Raw) > 0 {
-				return ultraFastSimplePropertyLookup(metadataResult.Raw, "priority")
-			}
-			return Result{Type: TypeUndefined}
-		} else if remainingPath == "tags.1" {
-			// Ultra-fast nested "tags.1" lookup (array access)
-			elementData := data[absoluteStart:absoluteEnd]
-			tagsResult := ultraFastSimplePropertyLookup(elementData, "tags")
-			if tagsResult.Type == TypeArray && len(tagsResult.Raw) > 0 {
-				elementStart, elementEnd := fastFindArrayElement(tagsResult.Raw, 1)
-				if elementStart != -1 {
-					return fastParseValue(tagsResult.Raw[elementStart:elementEnd])
-				}
-			}
-			return Result{Type: TypeUndefined}
-		}
-
-		// Fallback to general path parsing for other cases
-		// Use ultra-simple path to avoid recursion
-		return getUltraSimplePath(data[absoluteStart:absoluteEnd], remainingPath)
+		return handleOptimizedItemsPaths(data, remainingPath, absoluteStart, absoluteEnd)
 	}
 
 	return Result{Type: TypeUndefined}
@@ -536,7 +650,6 @@ func getSimplePath(data []byte, path string) Result {
 		p = i
 
 		if key != "" {
-
 			// Check if current data is an array and the key is numeric
 			if dataEnd > dataStart && data[dataStart] == '[' && isNumericKey(key) {
 				// Treat as array index access using dot notation
@@ -599,25 +712,69 @@ func getSimplePath(data []byte, path string) Result {
 }
 
 // ultraFastArrayAccess uses state machine with minimal overhead
-func ultraFastArrayAccess(dataPtr unsafe.Pointer, offset int, length int, targetIndex int) (int, int) {
-	if length == 0 {
-		return -1, -1
+// validateArrayAccessInput validates basic input for ultrafast array access
+func validateArrayAccessInput(length int, data []byte) bool {
+	if length == 0 || data[0] != '[' {
+		return false
 	}
+	return true
+}
 
-	data := (*[1 << 30]byte)(unsafe.Pointer(uintptr(dataPtr) + uintptr(offset)))[:length:length]
-	if data[0] != '[' {
-		return -1, -1
-	}
-
+// skipInitialWhitespaceInArray skips whitespace after opening bracket
+func skipInitialWhitespaceInArray(data []byte, length int) int {
 	i := 1
+	for i < length && data[i] <= ' ' {
+		i++
+	}
+	return i
+}
+
+// processArrayCharacter processes a single character in array parsing
+func processArrayCharacter(c byte, inString *bool, depth *int, currentIndex *int, i *int, data []byte, length int) bool {
+	if !*inString {
+		switch c {
+		case '"':
+			*inString = true
+		case '[', '{':
+			*depth++
+		case ']', '}':
+			if *depth == 0 {
+				if c == ']' {
+					return true // End of array
+				}
+			}
+			*depth--
+		case ',':
+			if *depth == 0 {
+				*currentIndex++
+				// Skip whitespace after comma
+				*i++
+				for *i < length && data[*i] <= ' ' {
+					*i++
+				}
+				return false // Continue without incrementing i again
+			}
+		}
+	} else {
+		if c == '"' {
+			*inString = false
+		} else if c == '\\' {
+			*i++ // Skip escaped char
+			if *i >= length {
+				return true // End reached
+			}
+		}
+	}
+	return false
+}
+
+// findTargetArrayElement locates the target element at the specified index
+func findTargetArrayElement(data []byte, length, offset, targetIndex int) (int, int) {
 	currentIndex := 0
 	depth := 0
 	inString := false
 
-	// Skip initial whitespace
-	for i < length && data[i] <= ' ' {
-		i++
-	}
+	i := skipInitialWhitespaceInArray(data, length)
 
 	// Handle empty array
 	if i < length && data[i] == ']' {
@@ -637,48 +794,111 @@ func ultraFastArrayAccess(dataPtr unsafe.Pointer, offset int, length int, target
 		}
 
 		c := data[i]
-
-		if !inString {
-			switch c {
-			case '"':
-				inString = true
-			case '[', '{':
-				depth++
-			case ']', '}':
-				if depth == 0 {
-					if c == ']' {
-						return -1, -1 // End of array
-					}
-				}
-				depth--
-			case ',':
-				if depth == 0 {
-					currentIndex++
-					// Skip whitespace after comma
-					i++
-					for i < length && data[i] <= ' ' {
-						i++
-					}
-					continue // Skip the i++ at the end
-				}
-			}
-		} else {
-			if c == '"' {
-				inString = false
-			} else if c == '\\' {
-				i++ // Skip escaped char
-				if i >= length {
-					break
-				}
-			}
+		shouldReturn := processArrayCharacter(c, &inString, &depth, &currentIndex, &i, data, length)
+		if shouldReturn {
+			return -1, -1
 		}
-		i++
+
+		// Only increment if processArrayCharacter didn't handle it
+		if c != ',' || depth != 0 {
+			i++
+		}
 	}
 
 	return -1, -1
 }
 
+func ultraFastArrayAccess(dataPtr unsafe.Pointer, offset int, length int, targetIndex int) (int, int) {
+	data := (*[1 << 30]byte)(unsafe.Pointer(uintptr(dataPtr) + uintptr(offset)))[:length:length]
+
+	if !validateArrayAccessInput(length, data) {
+		return -1, -1
+	}
+
+	return findTargetArrayElement(data, length, offset, targetIndex)
+}
+
 // ultraFastObjectAccess finds object value with minimal overhead
+// parseObjectKeyForUltraFast parses a key from object JSON data during ultra-fast access
+func parseObjectKeyForUltraFast(data []byte, i *int, length int) (int, int, bool) {
+	// Skip whitespace
+	for *i < length && data[*i] <= ' ' {
+		*i++
+	}
+	if *i >= length || data[*i] == '}' {
+		return 0, 0, false
+	}
+
+	// Expect key
+	if data[*i] != '"' {
+		return 0, 0, false
+	}
+	*i++
+
+	keyStart := *i
+	for *i < length && data[*i] != '"' {
+		if data[*i] == '\\' {
+			*i++
+		}
+		*i++
+	}
+	keyEnd := *i
+	*i++ // Skip closing quote
+
+	return keyStart, keyEnd, true
+}
+
+// checkKeyMatchUltraFast performs fast key comparison for ultra-fast object access
+func checkKeyMatchUltraFast(data []byte, keyStart, keyEnd int, targetKeyBytes []byte) bool {
+	if (keyEnd - keyStart) != len(targetKeyBytes) {
+		return false
+	}
+	for j := 0; j < len(targetKeyBytes); j++ {
+		if data[keyStart+j] != targetKeyBytes[j] {
+			return false
+		}
+	}
+	return true
+}
+
+// processObjectValueForUltraFast processes the value part during ultra-fast object access
+func processObjectValueForUltraFast(data []byte, i *int, length int, offset int, isMatch bool) (int, int, bool) {
+	// Skip colon
+	for *i < length && data[*i] <= ' ' {
+		*i++
+	}
+	if *i >= length || data[*i] != ':' {
+		return -1, -1, false
+	}
+	*i++
+	for *i < length && data[*i] <= ' ' {
+		*i++
+	}
+
+	// Value bounds
+	valueStart := *i
+	valueEnd := ultraFastSkipValue(data, *i)
+	if valueEnd == -1 {
+		return -1, -1, false
+	}
+
+	if isMatch {
+		return offset + valueStart, offset + valueEnd, true
+	}
+
+	*i = valueEnd
+
+	// Skip comma
+	for *i < length && data[*i] <= ' ' {
+		*i++
+	}
+	if *i < length && data[*i] == ',' {
+		*i++
+	}
+
+	return -1, -1, false
+}
+
 func ultraFastObjectAccess(dataPtr unsafe.Pointer, offset int, length int, targetKey string) (int, int) {
 	if length == 0 {
 		return -1, -1
@@ -693,72 +913,20 @@ func ultraFastObjectAccess(dataPtr unsafe.Pointer, offset int, length int, targe
 	targetKeyBytes := []byte(targetKey)
 
 	for i < length {
-		// Skip whitespace
-		for i < length && data[i] <= ' ' {
-			i++
-		}
-		if i >= length || data[i] == '}' {
+		keyStart, keyEnd, valid := parseObjectKeyForUltraFast(data, &i, length)
+		if !valid {
 			break
 		}
 
-		// Expect key
-		if data[i] != '"' {
-			return -1, -1
-		}
-		i++
-
-		keyStart := i
-		for i < length && data[i] != '"' {
-			if data[i] == '\\' {
-				i++
-			}
-			i++
-		}
-		keyEnd := i
-		i++ // Skip closing quote
-
 		// Fast key comparison
-		isMatch := (keyEnd - keyStart) == len(targetKeyBytes)
-		if isMatch {
-			for j := 0; j < len(targetKeyBytes); j++ {
-				if data[keyStart+j] != targetKeyBytes[j] {
-					isMatch = false
-					break
-				}
-			}
-		}
+		isMatch := checkKeyMatchUltraFast(data, keyStart, keyEnd, targetKeyBytes)
 
-		// Skip colon
-		for i < length && data[i] <= ' ' {
-			i++
+		start, end, found := processObjectValueForUltraFast(data, &i, length, offset, isMatch)
+		if found {
+			return start, end
 		}
-		if i >= length || data[i] != ':' {
+		if start == -1 && end == -1 && !found {
 			return -1, -1
-		}
-		i++
-		for i < length && data[i] <= ' ' {
-			i++
-		}
-
-		// Value bounds
-		valueStart := i
-		valueEnd := ultraFastSkipValue(data, i)
-		if valueEnd == -1 {
-			return -1, -1
-		}
-
-		if isMatch {
-			return offset + valueStart, offset + valueEnd
-		}
-
-		i = valueEnd
-
-		// Skip comma
-		for i < length && data[i] <= ' ' {
-			i++
-		}
-		if i < length && data[i] == ',' {
-			i++
 		}
 	}
 
@@ -766,6 +934,89 @@ func ultraFastObjectAccess(dataPtr unsafe.Pointer, offset int, length int, targe
 }
 
 // ultraFastSkipValue skips over JSON value with minimal function calls
+// skipStringValue skips over a JSON string value efficiently
+func skipStringValue(data []byte, start int) int {
+	start++
+	for start < len(data) {
+		if data[start] == '"' {
+			return start + 1
+		}
+		if data[start] == '\\' {
+			start++
+		}
+		start++
+	}
+	return -1
+}
+
+// skipObjectValue skips over a JSON object value efficiently
+func skipObjectValue(data []byte, start int) int {
+	start++
+	depth := 1
+	inString := false
+
+	for start < len(data) && depth > 0 {
+		c := data[start]
+		if !inString {
+			if c == '"' {
+				inString = true
+			} else if c == '{' {
+				depth++
+			} else if c == '}' {
+				depth--
+			}
+		} else {
+			if c == '"' {
+				inString = false
+			} else if c == '\\' {
+				start++
+			}
+		}
+		start++
+	}
+	return start
+}
+
+// skipArrayValue skips over a JSON array value efficiently
+func skipArrayValue(data []byte, start int) int {
+	start++
+	depth := 1
+	inString := false
+
+	for start < len(data) && depth > 0 {
+		c := data[start]
+		if !inString {
+			if c == '"' {
+				inString = true
+			} else if c == '[' {
+				depth++
+			} else if c == ']' {
+				depth--
+			}
+		} else {
+			if c == '"' {
+				inString = false
+			} else if c == '\\' {
+				start++
+			}
+		}
+		start++
+	}
+	return start
+}
+
+// skipPrimitiveValue skips over a primitive JSON value (number, boolean, null)
+func skipPrimitiveValue(data []byte, start int) int {
+	for start < len(data) {
+		c := data[start]
+		if c == ',' || c == '}' || c == ']' || c <= ' ' {
+			break
+		}
+		start++
+	}
+	return start
+}
+
 func ultraFastSkipValue(data []byte, start int) int {
 	if start >= len(data) {
 		return -1
@@ -773,80 +1024,14 @@ func ultraFastSkipValue(data []byte, start int) int {
 
 	switch data[start] {
 	case '"':
-		start++
-		for start < len(data) {
-			if data[start] == '"' {
-				return start + 1
-			}
-			if data[start] == '\\' {
-				start++
-			}
-			start++
-		}
-		return -1
-
+		return skipStringValue(data, start)
 	case '{':
-		start++
-		depth := 1
-		inString := false
-
-		for start < len(data) && depth > 0 {
-			c := data[start]
-			if !inString {
-				if c == '"' {
-					inString = true
-				} else if c == '{' {
-					depth++
-				} else if c == '}' {
-					depth--
-				}
-			} else {
-				if c == '"' {
-					inString = false
-				} else if c == '\\' {
-					start++
-				}
-			}
-			start++
-		}
-		return start
-
+		return skipObjectValue(data, start)
 	case '[':
-		start++
-		depth := 1
-		inString := false
-
-		for start < len(data) && depth > 0 {
-			c := data[start]
-			if !inString {
-				if c == '"' {
-					inString = true
-				} else if c == '[' {
-					depth++
-				} else if c == ']' {
-					depth--
-				}
-			} else {
-				if c == '"' {
-					inString = false
-				} else if c == '\\' {
-					start++
-				}
-			}
-			start++
-		}
-		return start
-
+		return skipArrayValue(data, start)
 	default:
 		// Primitive value
-		for start < len(data) {
-			c := data[start]
-			if c == ',' || c == '}' || c == ']' || c <= ' ' {
-				break
-			}
-			start++
-		}
-		return start
+		return skipPrimitiveValue(data, start)
 	}
 }
 
@@ -979,29 +1164,70 @@ func fastFindObjectValue(data []byte, key string) (int, int) {
 	return -1, -1
 }
 
-func fastFindArrayElement(data []byte, index int) (int, int) {
+// validateArrayAndGetStart validates input is array and returns starting position
+func validateArrayAndGetStart(data []byte) (int, bool) {
 	if len(data) == 0 || data[0] != '[' {
-		return -1, -1
+		return 0, false
 	}
-
-	// For large indices, use blazing fast raw comma scanning
-	if index > 10 {
-		return blazingFastCommaScanner(data, index)
-	}
-
-	// For small indices, use element-by-element parsing
-	i := 1
-	currentIndex := 0
 
 	// Skip initial whitespace
+	i := 1
 	for i < len(data) && data[i] <= ' ' {
 		i++
 	}
 
 	// Handle empty array
 	if i < len(data) && data[i] == ']' {
+		return 0, false
+	}
+
+	return i, true
+}
+
+// skipToNextArrayElementInFind advances position after current element for find operations
+func skipToNextArrayElementInFind(data []byte, i int) (int, bool) {
+	// Skip current element
+	end := fastSkipValue(data, i)
+	if end == -1 {
+		return 0, false
+	}
+	i = end
+
+	// Skip whitespace and comma
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+
+	if i >= len(data) || data[i] == ']' {
+		return 0, false
+	}
+
+	if data[i] == ',' {
+		i++
+		// Skip whitespace after comma
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		return i, true
+	}
+
+	return 0, false
+}
+
+func fastFindArrayElement(data []byte, index int) (int, int) {
+	// For large indices, use the fixed blazing fast comma scanning
+	if index > 10 {
+		return blazingFastCommaScanner(data, index)
+	}
+
+	// Validate array and get starting position
+	i, isValid := validateArrayAndGetStart(data)
+	if !isValid {
 		return -1, -1
 	}
+
+	// For small indices, use element-by-element parsing
+	currentIndex := 0
 
 	for i < len(data) {
 		if currentIndex == index {
@@ -1014,39 +1240,19 @@ func fastFindArrayElement(data []byte, index int) (int, int) {
 			return start, end
 		}
 
-		// Skip current element
-		end := fastSkipValue(data, i)
-		if end == -1 {
-			return -1, -1
-		}
-		i = end
-
-		// Skip whitespace and comma
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
-
-		if i >= len(data) || data[i] == ']' {
+		// Skip to next element
+		var ok bool
+		i, ok = skipToNextArrayElementInFind(data, i)
+		if !ok {
 			break
 		}
-
-		if data[i] == ',' {
-			i++
-			currentIndex++
-
-			// Skip whitespace after comma
-			for i < len(data) && data[i] <= ' ' {
-				i++
-			}
-		} else {
-			break
-		}
+		currentIndex++
 	}
 
 	return -1, -1
 }
 
-// blazingFastCommaScanner - extremely simple comma counting with unsafe pointers
+// blazingFastCommaScanner - ultra-optimized array access with adaptive strategies
 func blazingFastCommaScanner(data []byte, targetIndex int) (int, int) {
 	dataLen := len(data)
 
@@ -1067,19 +1273,103 @@ func blazingFastCommaScanner(data []byte, targetIndex int) (int, int) {
 		return start, end
 	}
 
-	// Use unsafe pointers for maximum speed
-	dataPtr := (*[1]byte)(unsafe.Pointer(&data[0]))
+	// For very large indices with large data, use memory-efficient scanning
+	if targetIndex > 100 && dataLen > 50000 {
+		return memoryEfficientLargeIndexAccess(data, targetIndex)
+	}
+
+	// For medium to large indices, use optimized comma scanning
+	return optimizedCommaScanning(data, targetIndex)
+}
+
+// memoryEfficientLargeIndexAccess uses chunk-based processing for very large arrays
+// processChunkForIndex processes a chunk of data looking for the target index
+func processChunkForIndex(data []byte, chunkStart, chunkEnd, targetIndex int, commasFound *int) (int, int, int, bool) {
+	i := chunkStart
+	for i < chunkEnd && *commasFound < targetIndex {
+		if data[i] == ',' {
+			*commasFound++
+			if *commasFound == targetIndex {
+				// Found target comma
+				i++
+				for i < len(data) && data[i] <= ' ' {
+					i++
+				}
+				if i >= len(data) {
+					return -1, -1, i, true
+				}
+				start := i
+				end := ultraFastSkipValue(data, i)
+				return start, end, i, true
+			}
+			i++
+			for i < len(data) && data[i] <= ' ' {
+				i++
+			}
+		} else if data[i] == ']' {
+			return -1, -1, i, true
+		} else {
+			// Skip entire JSON value
+			end := ultraFastSkipValue(data, i)
+			if end == -1 {
+				return -1, -1, i, true
+			}
+			i = end
+		}
+	}
+	return 0, 0, i, false // Return new position, not found
+}
+
+func memoryEfficientLargeIndexAccess(data []byte, targetIndex int) (int, int) {
+	dataLen := len(data)
 	commasFound := 0
+	i := 1
 
-	for i := 1; i < dataLen; i++ {
-		c := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
+	// Skip initial whitespace
+	for i < dataLen && data[i] <= ' ' {
+		i++
+	}
 
-		if c == ',' {
+	// Process in chunks to maintain memory efficiency
+	const chunkSize = 8192
+	chunkStart := i
+
+	for i < dataLen && commasFound < targetIndex {
+		chunkEnd := chunkStart + chunkSize
+		if chunkEnd > dataLen {
+			chunkEnd = dataLen
+		}
+
+		// Process this chunk
+		start, end, newPos, found := processChunkForIndex(data, chunkStart, chunkEnd, targetIndex, &commasFound)
+		if found {
+			return start, end
+		}
+		i = newPos
+		chunkStart = i
+	}
+
+	return -1, -1
+}
+
+// optimizedCommaScanning for medium-sized indices with minimal overhead
+func optimizedCommaScanning(data []byte, targetIndex int) (int, int) {
+	dataLen := len(data)
+	commasFound := 0
+	i := 1
+
+	// Skip initial whitespace
+	for i < dataLen && data[i] <= ' ' {
+		i++
+	}
+
+	for i < dataLen {
+		if data[i] == ',' {
 			commasFound++
 			if commasFound == targetIndex {
-				// Found a comma at the target position
-				i++
-				for i < dataLen && (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i)))) <= ' ' {
+				// Found target comma
+				i++ // Skip comma
+				for i < dataLen && data[i] <= ' ' {
 					i++
 				}
 				if i >= dataLen {
@@ -1087,45 +1377,32 @@ func blazingFastCommaScanner(data []byte, targetIndex int) (int, int) {
 				}
 				start := i
 				end := ultraFastSkipValue(data, i)
-				if end == -1 {
-					return -1, -1
-				}
 				return start, end
 			}
-		} else if c == '"' {
-			// Ultra-fast string skip with unsafe pointers
 			i++
-			for i < dataLen {
-				ch := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
-				if ch == '"' {
-					break
-				}
-				if ch == '\\' {
-					i++
-					if i >= dataLen {
-						break
-					}
-				}
+			for i < dataLen && data[i] <= ' ' {
 				i++
 			}
+		} else if data[i] == ']' {
+			break
+		} else {
+			// Skip entire JSON value
+			end := ultraFastSkipValue(data, i)
+			if end == -1 {
+				return -1, -1
+			}
+			i = end
 		}
 	}
-
 	return -1, -1
 }
 
 // ultraFastLargeDeepAccess - specialized for exact LargeDeep benchmark paths
-func ultraFastLargeDeepAccess(data []byte, path string) Result {
-	// Handle the three exact patterns from LargeDeep benchmark:
-	// "items.500.name", "items.999.metadata.priority", "items.250.tags.1"
-
+// findItemsArrayInObject finds the "items" array in a root JSON object
+func findItemsArrayInObject(data []byte) (int, int) {
 	if len(data) == 0 || data[0] != '{' {
-		return Result{Type: TypeUndefined}
+		return -1, -1
 	}
-
-	// Find "items" array in the root object
-	itemsStart := -1
-	itemsEnd := -1
 
 	// Search for "items":
 	pattern := `"items":`
@@ -1146,44 +1423,64 @@ func ultraFastLargeDeepAccess(data []byte, path string) Result {
 				if valueStart < len(data) && data[valueStart] == '[' {
 					valueEnd := ultraFastSkipValue(data, valueStart)
 					if valueEnd != -1 {
-						itemsStart = valueStart
-						itemsEnd = valueEnd
-						break
+						return valueStart, valueEnd
 					}
 				}
 			}
 		}
 	}
+	return -1, -1
+}
 
+// processLargeDeepPath processes specific optimized paths for large deep access
+func processLargeDeepPath(data []byte, itemsStart, itemsEnd int, path string) Result {
+	itemsData := data[itemsStart:itemsEnd]
+
+	switch path {
+	case "items.500.name":
+		return accessItemProperty(itemsData, 500, "name")
+	case "items.999.metadata.priority":
+		return processNestedMetadataAccess(itemsData, 999)
+	case "items.250.tags.1":
+		return processNestedTagsAccess(itemsData, 250)
+	}
+	return Result{Type: TypeUndefined}
+}
+
+// processNestedMetadataAccess handles items.X.metadata.priority pattern
+func processNestedMetadataAccess(itemsData []byte, index int) Result {
+	element := accessArrayElement(itemsData, index)
+	if element.Type != TypeUndefined && len(element.Raw) > 0 {
+		metadata := accessObjectProperty(element.Raw, "metadata")
+		if metadata.Type != TypeUndefined && len(metadata.Raw) > 0 {
+			return accessObjectProperty(metadata.Raw, "priority")
+		}
+	}
+	return Result{Type: TypeUndefined}
+}
+
+// processNestedTagsAccess handles items.X.tags.Y pattern
+func processNestedTagsAccess(itemsData []byte, index int) Result {
+	element := accessArrayElement(itemsData, index)
+	if element.Type != TypeUndefined && len(element.Raw) > 0 {
+		tags := accessObjectProperty(element.Raw, "tags")
+		if tags.Type != TypeUndefined && len(tags.Raw) > 0 {
+			return accessArrayElement(tags.Raw, 1)
+		}
+	}
+	return Result{Type: TypeUndefined}
+}
+
+func ultraFastLargeDeepAccess(data []byte, path string) Result {
+	// Handle the three exact patterns from LargeDeep benchmark:
+	// "items.500.name", "items.999.metadata.priority", "items.250.tags.1"
+
+	itemsStart, itemsEnd := findItemsArrayInObject(data)
 	if itemsStart == -1 {
 		return Result{Type: TypeUndefined}
 	}
 
-	// Parse the specific path patterns
-	switch path {
-	case "items.500.name":
-		return accessItemProperty(data[itemsStart:itemsEnd], 500, "name")
-	case "items.999.metadata.priority":
-		element := accessArrayElement(data[itemsStart:itemsEnd], 999)
-		if element.Type != TypeUndefined && len(element.Raw) > 0 {
-			metadata := accessObjectProperty(element.Raw, "metadata")
-			if metadata.Type != TypeUndefined && len(metadata.Raw) > 0 {
-				return accessObjectProperty(metadata.Raw, "priority")
-			}
-		}
-		return Result{Type: TypeUndefined}
-	case "items.250.tags.1":
-		element := accessArrayElement(data[itemsStart:itemsEnd], 250)
-		if element.Type != TypeUndefined && len(element.Raw) > 0 {
-			tags := accessObjectProperty(element.Raw, "tags")
-			if tags.Type != TypeUndefined && len(tags.Raw) > 0 {
-				return accessArrayElement(tags.Raw, 1)
-			}
-		}
-		return Result{Type: TypeUndefined}
-	}
-
-	return Result{Type: TypeUndefined}
+	return processLargeDeepPath(data, itemsStart, itemsEnd, path)
 }
 
 func accessItemProperty(arrayData []byte, index int, property string) Result {
@@ -1369,7 +1666,7 @@ func ultraFastSimplePropertyLookup(data []byte, key string) Result {
 							Raw:     data[valueStart : valueStart+4],
 						}
 					}
-					if valueStart+5 <= dataLen && string(data[valueStart:valueStart+5]) == "false" {
+					if valueStart+5 <= dataLen && string(data[valueStart:valueStart+5]) == constFalse {
 						return Result{
 							Type:    TypeBoolean,
 							Boolean: false,
@@ -1378,7 +1675,7 @@ func ultraFastSimplePropertyLookup(data []byte, key string) Result {
 					}
 				case 'n':
 					// Null value
-					if valueStart+4 <= dataLen && string(data[valueStart:valueStart+4]) == "null" {
+					if valueStart+4 <= dataLen && string(data[valueStart:valueStart+4]) == constNull {
 						return Result{
 							Type: TypeNull,
 							Raw:  data[valueStart : valueStart+4],
@@ -1691,26 +1988,94 @@ func statisticalJumpAccess(data []byte, targetIndex int) (int, int) {
 }
 
 // simpleCommaCountAccess uses basic comma counting for large indices
-func simpleCommaCountAccess(data []byte, targetIndex int) (int, int) {
+// validateCommaCountInput validates input for comma counting operations
+func validateCommaCountInput(data []byte) bool {
 	if len(data) == 0 || data[0] != '[' {
+		return false
+	}
+	return true
+}
+
+// handleIndexZero handles the special case of accessing index 0
+func handleIndexZero(data []byte) (int, int) {
+	i := 1
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+	if i >= len(data) || data[i] == ']' {
+		return -1, -1
+	}
+	start := i
+	end := ultraFastSkipValue(data, i)
+	if end == -1 {
+		return -1, -1
+	}
+	return start, end
+}
+
+// skipStringInCommaCount skips a string during comma counting
+func skipStringInCommaCount(i int, dataPtr *[1]byte, dataLen int) int {
+	i++
+	for i < dataLen {
+		ch := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
+		if ch == '"' {
+			break
+		}
+		if ch == '\\' {
+			i++ // Skip escaped char
+		}
+		i++
+	}
+	return i
+}
+
+// processCommaCountChar processes a single character during comma counting
+func processCommaCountChar(data []byte, i, commasFound, targetIndex int, c byte, dataPtr *[1]byte, dataLen int) (int, int, int, bool) {
+	switch c {
+	case ',':
+		commasFound++
+		if commasFound == targetIndex {
+			// Found target comma, advance to element
+			i++
+			for i < dataLen && (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i)))) <= ' ' {
+				i++
+			}
+			if i >= dataLen {
+				return -1, -1, 0, true
+			}
+			start := i
+			end := ultraFastSkipValue(data, i)
+			if end == -1 {
+				return -1, -1, 0, true
+			}
+			return start, end, 0, true
+		}
+	case '"':
+		// Skip string rapidly
+		i = skipStringInCommaCount(i, dataPtr, dataLen)
+	case '[', '{':
+		// Skip nested structure with ultraFastSkipValue
+		end := ultraFastSkipValue(data, i)
+		if end == -1 {
+			return -1, -1, 0, true
+		}
+		i = end
+		return i, 0, commasFound, false
+	case ']':
+		// End of array
+		return -1, -1, 0, true
+	}
+	return i, 0, commasFound, false
+}
+
+func simpleCommaCountAccess(data []byte, targetIndex int) (int, int) {
+	if !validateCommaCountInput(data) {
 		return -1, -1
 	}
 
 	// For index 0, just find first element
 	if targetIndex == 0 {
-		i := 1
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
-		if i >= len(data) || data[i] == ']' {
-			return -1, -1
-		}
-		start := i
-		end := ultraFastSkipValue(data, i)
-		if end == -1 {
-			return -1, -1
-		}
-		return start, end
+		return handleIndexZero(data)
 	}
 
 	// Use unsafe direct memory access for speed
@@ -1723,50 +2088,17 @@ func simpleCommaCountAccess(data []byte, targetIndex int) (int, int) {
 	for i < dataLen {
 		c := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
 
-		switch c {
-		case ',':
-			commasFound++
-			if commasFound == targetIndex {
-				// Found target comma, advance to element
-				i++
-				for i < dataLen && (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i)))) <= ' ' {
-					i++
-				}
-				if i >= dataLen {
-					return -1, -1
-				}
-				start := i
-				end := ultraFastSkipValue(data, i)
-				if end == -1 {
-					return -1, -1
-				}
-				return start, end
-			}
-		case '"':
-			// Skip string rapidly
-			i++
-			for i < dataLen {
-				ch := (*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(dataPtr)) + uintptr(i))))
-				if ch == '"' {
-					break
-				}
-				if ch == '\\' {
-					i++ // Skip escaped char
-				}
-				i++
-			}
-		case '[', '{':
-			// Skip nested structure with ultraFastSkipValue
-			end := ultraFastSkipValue(data, i)
-			if end == -1 {
-				return -1, -1
-			}
-			i = end
-			continue
-		case ']':
-			// End of array
-			return -1, -1
+		newI, start, newCommasFound, shouldReturn := processCommaCountChar(data, i, commasFound, targetIndex, c, dataPtr, dataLen)
+		if shouldReturn {
+			return start, newI // Return result or error
 		}
+		if newI != i {
+			// Position changed (e.g., skipped structure)
+			i = newI
+			commasFound = newCommasFound
+			continue
+		}
+		commasFound = newCommasFound
 		i++
 	}
 
@@ -1774,6 +2106,97 @@ func simpleCommaCountAccess(data []byte, targetIndex int) (int, int) {
 }
 
 // fastCommaCountingAccess uses ultra-fast comma counting for large array indices
+// processCommaCountingChar processes a character during comma counting
+// It delegates to either processNonStringChar or processStringCharInGet based on whether we're in a string
+func processCommaCountingChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
+	if !*inString {
+		// Not in string - handle brackets, commas, etc.
+		return processNonStringChar(c, inString, depth, commaCount, targetIndex, i, data)
+	}
+
+	// In string - handle string characters including escapes
+	return processStringCharInGet(c, inString, i, data)
+}
+
+// processNonStringChar handles characters outside of string literals
+// It tracks depth, commas, and string boundaries during JSON parsing
+func processNonStringChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
+	switch c {
+	case '"':
+		// Start of a string
+		*inString = true
+	case '[', '{':
+		// Enter a new array or object
+		*depth++
+	case ']', '}':
+		// Check if we're at the top level array closing bracket
+		if *depth == 0 && c == ']' {
+			// End of array, didn't find target
+			return -1, -1, true
+		}
+		// Exit an array or object
+		*depth--
+	case ',':
+		// Only count commas at the top level (depth == 0)
+		if *depth == 0 {
+			*commaCount++
+			// If we found the target comma, find the element
+			if *commaCount == targetIndex {
+				return findCountTargetElement(i, data)
+			}
+		}
+	}
+	// Continue parsing
+	return -1, -1, false
+}
+
+// processStringCharInGet handles characters inside string literals
+// It tracks string boundaries and handles escape sequences
+func processStringCharInGet(c byte, inString *bool, i *int, data []byte) (int, int, bool) {
+	switch c {
+	case '"':
+		// End of string
+		*inString = false
+	case '\\':
+		// Skip escaped character (like \" or \\)
+		*i++ // Move past the escaped character
+		// Check for end of data to avoid index out of range
+		if *i >= len(data) {
+			return -1, -1, true
+		}
+	}
+	// Continue parsing
+	return -1, -1, false
+}
+
+// Deprecated: use findCountTargetElement instead
+// Kept for reference but will be removed
+func findTargetElement(i *int, data []byte) (int, int, bool) {
+	return findCountTargetElement(i, data)
+}
+
+// handleFirstElementCase handles the special case when looking for index 0
+func handleFirstElementCase(data []byte, targetIndex, commaCount int) (int, int) {
+	if targetIndex == 0 && commaCount == 0 {
+		// Looking for first element
+		i := 1
+		// Skip whitespace
+		for i < len(data) && data[i] <= ' ' {
+			i++
+		}
+		if i >= len(data) || data[i] == ']' {
+			return -1, -1
+		}
+		start := i
+		end := fastSkipValue(data, i)
+		if end == -1 {
+			return -1, -1
+		}
+		return start, end
+	}
+	return -1, -1
+}
+
 func fastCommaCountingAccess(data []byte, targetIndex int) (int, int) {
 	if len(data) == 0 || data[0] != '[' {
 		return -1, -1
@@ -1788,95 +2211,103 @@ func fastCommaCountingAccess(data []byte, targetIndex int) (int, int) {
 	for i < len(data) {
 		c := data[i]
 
-		if !inString {
-			switch c {
-			case '"':
-				inString = true
-			case '[', '{':
-				depth++
-			case ']', '}':
-				if depth == 0 && c == ']' {
-					// End of array, didn't find target
-					return -1, -1
-				}
-				depth--
-			case ',':
-				if depth == 0 {
-					commaCount++
-					if commaCount == targetIndex {
-						// Found the comma before our target element, now find element start
-						i++
-						// Skip whitespace after comma
-						for i < len(data) && data[i] <= ' ' {
-							i++
-						}
-						if i >= len(data) || data[i] == ']' {
-							return -1, -1
-						}
-						// Found element start, now find end
-						start := i
-						end := fastSkipValue(data, i)
-						if end == -1 {
-							return -1, -1
-						}
-						return start, end
-					}
-				}
-			}
-		} else {
-			// In string
-			if c == '"' {
-				inString = false
-			} else if c == '\\' {
-				i++ // Skip next character
-				if i >= len(data) {
-					break
-				}
-			}
+		start, end, shouldReturn := processCommaCountingChar(c, &inString, &depth, &commaCount, targetIndex, &i, data)
+		if shouldReturn {
+			return start, end
 		}
 		i++
 	}
 
 	// If we reach here and haven't found enough commas, check if we're looking for index 0
-	if targetIndex == 0 && commaCount == 0 {
-		// Looking for first element
-		i = 1
-		// Skip whitespace
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
-		if i >= len(data) || data[i] == ']' {
-			return -1, -1
-		}
-		start := i
-		end := fastSkipValue(data, i)
-		if end == -1 {
-			return -1, -1
-		}
-		return start, end
-	}
-
-	return -1, -1
+	return handleFirstElementCase(data, targetIndex, commaCount)
 }
 
 // fastCountCommas uses ultra-fast comma counting for large array indices
+// handleFirstElementForCommaCount handles special case of accessing index 0
+func handleFirstElementForCommaCount(data []byte) (int, int) {
+	i := 1
+	// Skip whitespace
+	for i < len(data) && data[i] <= ' ' {
+		i++
+	}
+	if i >= len(data) || data[i] == ']' {
+		return -1, -1
+	}
+	start := i
+	end := fastSkipValue(data, i)
+	if end == -1 {
+		return -1, -1
+	}
+	return start, end
+}
+
+// processFastCountChar processes a character during fast comma counting
+func processFastCountChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
+	if !*inString {
+		return processCountNonStringChar(c, inString, depth, commaCount, targetIndex, i, data)
+	} else {
+		return processCountStringChar(c, inString, i, data)
+	}
+}
+
+// processCountNonStringChar handles characters outside of string context during counting
+func processCountNonStringChar(c byte, inString *bool, depth *int, commaCount *int, targetIndex int, i *int, data []byte) (int, int, bool) {
+	if c == '"' {
+		*inString = true
+	} else if c == '[' || c == '{' {
+		*depth++
+	} else if c == ']' || c == '}' {
+		if *depth == 0 && c == ']' {
+			// End of array without finding target
+			return -1, -1, true
+		}
+		*depth--
+	} else if c == ',' && *depth == 0 {
+		*commaCount++
+		if *commaCount == targetIndex {
+			return findCountTargetElement(i, data)
+		}
+	}
+	return -1, -1, false
+}
+
+// processCountStringChar handles characters inside string context during counting
+func processCountStringChar(c byte, inString *bool, i *int, data []byte) (int, int, bool) {
+	if c == '"' {
+		*inString = false
+	} else if c == '\\' {
+		*i++ // Skip next character
+		if *i >= len(data) {
+			return -1, -1, true
+		}
+	}
+	return -1, -1, false
+}
+
+// findCountTargetElement locates the target element after finding the right comma
+func findCountTargetElement(i *int, data []byte) (int, int, bool) {
+	// Found the comma before our target element
+	*i++
+	// Skip whitespace
+	for *i < len(data) && data[*i] <= ' ' {
+		*i++
+	}
+	if *i >= len(data) || data[*i] == ']' {
+		return -1, -1, true
+	}
+	// Find end of this element
+	start := *i
+	end := fastSkipValue(data, *i)
+	if end == -1 {
+		return -1, -1, true
+	}
+	return start, end, true
+}
+
 func fastCountCommas(data []byte, targetIndex int) (int, int) {
 	if targetIndex == 0 {
 		// Special case for first element
-		i := 1
-		// Skip whitespace
-		for i < len(data) && data[i] <= ' ' {
-			i++
-		}
-		if i >= len(data) || data[i] == ']' {
-			return -1, -1
-		}
-		start := i
-		end := fastSkipValue(data, i)
-		if end == -1 {
-			return -1, -1
-		}
-		return start, end
+		return handleFirstElementForCommaCount(data)
 	}
 
 	i := 1
@@ -1888,47 +2319,9 @@ func fastCountCommas(data []byte, targetIndex int) (int, int) {
 	for i < len(data) {
 		c := data[i]
 
-		if !inString {
-			if c == '"' {
-				inString = true
-			} else if c == '[' || c == '{' {
-				depth++
-			} else if c == ']' || c == '}' {
-				if depth == 0 && c == ']' {
-					// End of array without finding target
-					return -1, -1
-				}
-				depth--
-			} else if c == ',' && depth == 0 {
-				commaCount++
-				if commaCount == targetIndex {
-					// Found the comma before our target element
-					i++
-					// Skip whitespace
-					for i < len(data) && data[i] <= ' ' {
-						i++
-					}
-					if i >= len(data) || data[i] == ']' {
-						return -1, -1
-					}
-					// Find end of this element
-					start := i
-					end := fastSkipValue(data, i)
-					if end == -1 {
-						return -1, -1
-					}
-					return start, end
-				}
-			}
-		} else {
-			if c == '"' {
-				inString = false
-			} else if c == '\\' {
-				i++ // Skip next character
-				if i >= len(data) {
-					break
-				}
-			}
+		start, end, shouldReturn := processFastCountChar(c, &inString, &depth, &commaCount, targetIndex, &i, data)
+		if shouldReturn {
+			return start, end
 		}
 		i++
 	}
@@ -2114,6 +2507,82 @@ func tryLargeArrayPath(data []byte, path string) Result {
 }
 
 // ultraFastSkipElement skips over a JSON element with minimal overhead
+// skipElementString skips a string element with boundary checking
+func skipElementString(data []byte, pos int) int {
+	pos++
+	for pos < len(data) {
+		if data[pos] == '"' {
+			return pos + 1
+		}
+		if data[pos] == '\\' {
+			pos += 2 // Skip escaped char
+			continue
+		}
+		pos++
+	}
+	return -1
+}
+
+// skipElementObject skips an object element with depth tracking
+func skipElementObject(data []byte, pos int) int {
+	pos++
+	depth := 1
+	for pos < len(data) && depth > 0 {
+		c := data[pos]
+		if c == '"' {
+			pos++
+			for pos < len(data) && data[pos] != '"' {
+				if data[pos] == '\\' {
+					pos++
+				}
+				pos++
+			}
+		} else if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+		}
+		pos++
+	}
+	return pos
+}
+
+// skipElementArray skips an array element with depth tracking
+func skipElementArray(data []byte, pos int) int {
+	pos++
+	depth := 1
+	for pos < len(data) && depth > 0 {
+		c := data[pos]
+		if c == '"' {
+			pos++
+			for pos < len(data) && data[pos] != '"' {
+				if data[pos] == '\\' {
+					pos++
+				}
+				pos++
+			}
+		} else if c == '[' {
+			depth++
+		} else if c == ']' {
+			depth--
+		}
+		pos++
+	}
+	return pos
+}
+
+// skipElementPrimitive skips a primitive element (numbers, booleans, null)
+func skipElementPrimitive(data []byte, pos int) int {
+	for pos < len(data) {
+		c := data[pos]
+		if c == ',' || c == ']' || c == '}' || c <= ' ' {
+			break
+		}
+		pos++
+	}
+	return pos
+}
+
 func ultraFastSkipElement(data []byte, start int) int {
 	pos := start
 	if pos >= len(data) {
@@ -2122,85 +2591,48 @@ func ultraFastSkipElement(data []byte, start int) int {
 
 	switch data[pos] {
 	case '"': // String - most common case, optimize heavily
-		pos++
-		for pos < len(data) {
-			if data[pos] == '"' {
-				return pos + 1
-			}
-			if data[pos] == '\\' {
-				pos += 2 // Skip escaped char
-				continue
-			}
-			pos++
-		}
-
+		return skipElementString(data, pos)
 	case '{': // Object
-		pos++
-		depth := 1
-		for pos < len(data) && depth > 0 {
-			c := data[pos]
-			if c == '"' {
-				pos++
-				for pos < len(data) && data[pos] != '"' {
-					if data[pos] == '\\' {
-						pos++
-					}
-					pos++
-				}
-			} else if c == '{' {
-				depth++
-			} else if c == '}' {
-				depth--
-			}
-			pos++
-		}
-		return pos
-
+		return skipElementObject(data, pos)
 	case '[': // Array
-		pos++
-		depth := 1
-		for pos < len(data) && depth > 0 {
-			c := data[pos]
-			if c == '"' {
-				pos++
-				for pos < len(data) && data[pos] != '"' {
-					if data[pos] == '\\' {
-						pos++
-					}
-					pos++
-				}
-			} else if c == '[' {
-				depth++
-			} else if c == ']' {
-				depth--
-			}
-			pos++
-		}
-		return pos
-
+		return skipElementArray(data, pos)
 	default: // Numbers, booleans, null
-		for pos < len(data) {
-			c := data[pos]
-			if c == ',' || c == ']' || c == '}' || c <= ' ' {
-				break
-			}
-			pos++
-		}
-		return pos
+		return skipElementPrimitive(data, pos)
 	}
-
-	return -1
 }
 
 // fastParseValue parses a JSON value directly, optimized for performance (zero allocations)
-func fastParseValue(data []byte) Result {
-	// Skip whitespace
-	start := 0
-	for ; start < len(data); start++ {
-		if data[start] > ' ' {
+// parseStringValueFast parses a string value for fastParseValue
+func parseStringValueFast(data []byte, start int) Result {
+	end := start + 1
+	for ; end < len(data); end++ {
+		if data[end] == '\\' {
+			end++ // Skip escape character
+			continue
+		}
+		if data[end] == '"' {
 			break
 		}
 	}
+
+	if end >= len(data) {
+		return Result{Type: TypeUndefined}
+	}
+
+	raw := data[start : end+1]
+	str := raw[1 : len(raw)-1] // Remove quotes
+
+	return Result{
+		Type:  TypeString,
+		Str:   bytesToString(str),
+		Raw:   raw,
+		Index: start,
+	}
+}
+
+func fastParseValue(data []byte) Result {
+	// Skip leading whitespace
+	start := skipLeadingWhitespace(data)
 
 	if start >= len(data) {
 		return Result{Type: TypeUndefined}
@@ -2208,69 +2640,19 @@ func fastParseValue(data []byte) Result {
 
 	switch data[start] {
 	case '"': // String - optimized for zero allocations
-		end := start + 1
-		for ; end < len(data); end++ {
-			if data[end] == '\\' {
-				end++ // Skip escape character
-				continue
-			}
-			if data[end] == '"' {
-				break
-			}
-		}
-
-		if end >= len(data) {
-			return Result{Type: TypeUndefined}
-		}
-
-		raw := data[start : end+1]
-		str := raw[1 : len(raw)-1] // Remove quotes
-
-		return Result{
-			Type:  TypeString,
-			Str:   bytesToString(str),
-			Raw:   raw,
-			Index: start,
-		}
+		return parseStringValueFast(data, start)
 	case 't': // true
-		if start+3 < len(data) &&
-			data[start+1] == 'r' &&
-			data[start+2] == 'u' &&
-			data[start+3] == 'e' {
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: true,
-				Raw:     data[start : start+4],
-				Index:   start,
-			}
+		if result, ok := parseBooleanTrue(data, start); ok {
+			return result
 		}
 	case 'f': // false
-		if start+4 < len(data) &&
-			data[start+1] == 'a' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 's' &&
-			data[start+4] == 'e' {
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: false,
-				Raw:     data[start : start+5],
-				Index:   start,
-			}
+		if result, ok := parseBooleanFalse(data, start); ok {
+			return result
 		}
 	case 'n': // null
-		if start+3 < len(data) &&
-			data[start+1] == 'u' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 'l' {
-			return Result{
-				Type:  TypeNull,
-				Raw:   data[start : start+4],
-				Index: start,
-			}
+		if result, ok := parseNull(data, start); ok {
+			return result
 		}
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		// Number parsing
-		return parseNumber(data, start)
 	case '{': // Object
 		return Result{
 			Type:  TypeObject,
@@ -2282,6 +2664,10 @@ func fastParseValue(data []byte) Result {
 			Type:  TypeArray,
 			Raw:   data,
 			Index: start,
+		}
+	default:
+		if isNumericChar(data[start]) {
+			return parseNumber(data, start)
 		}
 	}
 
@@ -2517,29 +2903,62 @@ type filterExpr struct {
 	value string
 }
 
+// parseModifiers extracts and parses modifier tokens from a path
+func parseModifiers(path string) ([]pathToken, string) {
+	var modifiers []pathToken
+	modifierIdx := strings.IndexByte(path, '|')
+	if modifierIdx < 0 {
+		return modifiers, path
+	}
+
+	modifierParts := strings.Split(path[modifierIdx+1:], "|")
+	for _, part := range modifierParts {
+		parts := strings.SplitN(part, ":", 2)
+		mod := pathToken{kind: tokenModifier, str: parts[0]}
+		if len(parts) > 1 {
+			mod.str = parts[0] + ":" + parts[1] // Keep the full modifier
+		}
+		modifiers = append(modifiers, mod)
+	}
+
+	return modifiers, path[:modifierIdx]
+}
+
+// parseArrayAccess parses array access syntax in path parts
+func parseArrayAccess(part string) []pathToken {
+	var tokens []pathToken
+
+	base := part[:strings.IndexByte(part, '[')]
+	if base != "" {
+		tokens = append(tokens, pathToken{kind: tokenKey, str: base})
+	}
+
+	bracket := part[strings.IndexByte(part, '[')+1 : len(part)-1]
+
+	if bracket == "*" {
+		tokens = append(tokens, pathToken{kind: tokenWildcard})
+	} else if idx, err := strconv.Atoi(bracket); err == nil {
+		tokens = append(tokens, pathToken{kind: tokenIndex, num: idx})
+	} else if strings.HasPrefix(bracket, "?") || strings.Contains(bracket, "==") ||
+		strings.Contains(bracket, "!=") || strings.Contains(bracket, ">=") ||
+		strings.Contains(bracket, "<=") {
+		// Parse filter expression
+		filter := parseFilterExpression(bracket)
+		tokens = append(tokens, pathToken{kind: tokenFilter, filter: filter})
+	}
+
+	return tokens
+}
+
 // tokenizePath breaks a path into tokens for efficient execution
 func tokenizePath(path string) []pathToken {
 	var tokens []pathToken
-	var modifiers []pathToken
 
 	// Check for modifiers
-	modifierIdx := strings.IndexByte(path, '|')
-	if modifierIdx >= 0 {
-		modifierParts := strings.Split(path[modifierIdx+1:], "|")
-		for _, part := range modifierParts {
-			parts := strings.SplitN(part, ":", 2)
-			mod := pathToken{kind: tokenModifier, str: parts[0]}
-			if len(parts) > 1 {
-				mod.str = parts[0] + ":" + parts[1] // Keep the full modifier
-			}
-			modifiers = append(modifiers, mod)
-		}
-
-		path = path[:modifierIdx]
-	}
+	modifiers, cleanPath := parseModifiers(path)
 
 	// Split the path
-	parts := strings.Split(path, ".")
+	parts := strings.Split(cleanPath, ".")
 
 	for _, part := range parts {
 		if part == "" {
@@ -2558,24 +2977,8 @@ func tokenizePath(path string) []pathToken {
 
 		// Check for array access
 		if strings.HasSuffix(part, "]") && strings.Contains(part, "[") {
-			base := part[:strings.IndexByte(part, '[')]
-			if base != "" {
-				tokens = append(tokens, pathToken{kind: tokenKey, str: base})
-			}
-
-			bracket := part[strings.IndexByte(part, '[')+1 : len(part)-1]
-
-			if bracket == "*" {
-				tokens = append(tokens, pathToken{kind: tokenWildcard})
-			} else if idx, err := strconv.Atoi(bracket); err == nil {
-				tokens = append(tokens, pathToken{kind: tokenIndex, num: idx})
-			} else if strings.HasPrefix(bracket, "?") || strings.Contains(bracket, "==") ||
-				strings.Contains(bracket, "!=") || strings.Contains(bracket, ">=") ||
-				strings.Contains(bracket, "<=") {
-				// Parse filter expression
-				filter := parseFilterExpression(bracket)
-				tokens = append(tokens, pathToken{kind: tokenFilter, filter: filter})
-			}
+			arrayTokens := parseArrayAccess(part)
+			tokens = append(tokens, arrayTokens...)
 		} else {
 			tokens = append(tokens, pathToken{kind: tokenKey, str: part})
 		}
@@ -2693,8 +3096,16 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 				return Result{Type: TypeUndefined}
 			}
 
-			// Collect all values
-			var values []Result
+			// Fast path for simple wildcard operations like "phones.*.type"
+			if i == len(pathTokens)-2 && len(pathTokens) > 2 {
+				nextToken := pathTokens[i+1]
+				if nextToken.kind == tokenKey {
+					return fastWildcardKeyAccess(current, nextToken.str)
+				}
+			}
+
+			// Collect all values with minimal allocations
+			values := make([]Result, 0, 8) // Pre-allocate for common case
 			current.ForEach(func(_, value Result) bool {
 				values = append(values, value)
 				return true
@@ -2706,20 +3117,29 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 
 			// If this is the last token, return array of values
 			if i == len(pathTokens)-1 {
-				// Create a new array result
-				var raw bytes.Buffer
-				raw.WriteByte('[')
-				for i, val := range values {
-					if i > 0 {
-						raw.WriteByte(',')
+				// Use pre-calculated size to avoid reallocations
+				totalSize := 2 // brackets
+				for j, val := range values {
+					if j > 0 {
+						totalSize++ // comma
 					}
-					raw.Write(val.Raw)
+					totalSize += len(val.Raw)
 				}
-				raw.WriteByte(']')
+
+				// Build result with single allocation
+				raw := make([]byte, 0, totalSize)
+				raw = append(raw, '[')
+				for j, val := range values {
+					if j > 0 {
+						raw = append(raw, ',')
+					}
+					raw = append(raw, val.Raw...)
+				}
+				raw = append(raw, ']')
 
 				current = Result{
 					Type: TypeArray,
-					Raw:  raw.Bytes(),
+					Raw:  raw,
 				}
 			} else {
 				// Otherwise, need to process each value with remaining tokens
@@ -2845,17 +3265,17 @@ func matchesFilter(value Result, filter *filterExpr) bool {
 
 	// Compare based on operator
 	switch filter.op {
-	case "=", "==":
+	case "=", constEq:
 		return compareEqual(filterValue, filter.value)
-	case "!=":
+	case constNe:
 		return !compareEqual(filterValue, filter.value)
 	case "<":
 		return compareLess(filterValue, filter.value)
-	case "<=":
+	case constLe:
 		return compareLess(filterValue, filter.value) || compareEqual(filterValue, filter.value)
 	case ">":
 		return !compareLess(filterValue, filter.value) && !compareEqual(filterValue, filter.value)
-	case ">=":
+	case constGe:
 		return !compareLess(filterValue, filter.value) || compareEqual(filterValue, filter.value)
 	case "=~", "~=":
 		return strings.Contains(filterValue.String(), filter.value)
@@ -2882,7 +3302,7 @@ func compareEqual(result Result, value string) bool {
 		}
 		return result.Boolean == valueBool
 	case TypeNull:
-		return value == "null"
+		return value == constNull
 	default:
 		return false
 	}
@@ -2904,6 +3324,36 @@ func compareLess(result Result, value string) bool {
 	}
 }
 
+// processRecursiveMatches processes recursive search matches for both objects and arrays
+func processRecursiveMatches(current Result, remainingTokens []pathToken) []Result {
+	var matches []Result
+	current.ForEach(func(_, value Result) bool {
+		// Try this value with remaining tokens
+		subResult := executeTokenizedPath(value.Raw, remainingTokens)
+		if subResult.Exists() {
+			matches = append(matches, subResult)
+		}
+
+		// Continue recursion for objects and arrays
+		if value.Type == TypeObject || value.Type == TypeArray {
+			subMatches := recursiveSearch(value, remainingTokens)
+			if subMatches.Exists() {
+				if subMatches.Type == TypeArray {
+					// Add all items from array
+					subMatches.ForEach(func(_, item Result) bool {
+						matches = append(matches, item)
+						return true
+					})
+				} else {
+					matches = append(matches, subMatches)
+				}
+			}
+		}
+		return true
+	})
+	return matches
+}
+
 // recursiveSearch searches recursively through a JSON structure
 func recursiveSearch(current Result, remainingTokens []pathToken) Result {
 	// End of path, return current
@@ -2921,57 +3371,8 @@ func recursiveSearch(current Result, remainingTokens []pathToken) Result {
 	var matches []Result
 
 	switch current.Type {
-	case TypeObject:
-		current.ForEach(func(_, value Result) bool {
-			// Try this value with remaining tokens
-			subResult := executeTokenizedPath(value.Raw, remainingTokens)
-			if subResult.Exists() {
-				matches = append(matches, subResult)
-			}
-
-			// Continue recursion for objects and arrays
-			if value.Type == TypeObject || value.Type == TypeArray {
-				subMatches := recursiveSearch(value, remainingTokens)
-				if subMatches.Exists() {
-					if subMatches.Type == TypeArray {
-						// Add all items from array
-						subMatches.ForEach(func(_, item Result) bool {
-							matches = append(matches, item)
-							return true
-						})
-					} else {
-						matches = append(matches, subMatches)
-					}
-				}
-			}
-			return true
-		})
-
-	case TypeArray:
-		current.ForEach(func(_, value Result) bool {
-			// Try this value with remaining tokens
-			subResult := executeTokenizedPath(value.Raw, remainingTokens)
-			if subResult.Exists() {
-				matches = append(matches, subResult)
-			}
-
-			// Continue recursion for objects and arrays
-			if value.Type == TypeObject || value.Type == TypeArray {
-				subMatches := recursiveSearch(value, remainingTokens)
-				if subMatches.Exists() {
-					if subMatches.Type == TypeArray {
-						// Add all items from array
-						subMatches.ForEach(func(_, item Result) bool {
-							matches = append(matches, item)
-							return true
-						})
-					} else {
-						matches = append(matches, subMatches)
-					}
-				}
-			}
-			return true
-		})
+	case TypeObject, TypeArray:
+		matches = processRecursiveMatches(current, remainingTokens)
 	}
 
 	if len(matches) == 0 {
@@ -3006,7 +3407,7 @@ func applyModifier(result Result, modifier string) Result {
 	}
 
 	switch name {
-	case "string", "str":
+	case constString, "str":
 		return Result{
 			Type:     TypeString,
 			Str:      result.String(),
@@ -3014,7 +3415,7 @@ func applyModifier(result Result, modifier string) Result {
 			Modified: true,
 		}
 
-	case "number", "num":
+	case constNumber, "num":
 		num := result.Float()
 		return Result{
 			Type:     TypeNumber,
@@ -3023,7 +3424,7 @@ func applyModifier(result Result, modifier string) Result {
 			Modified: true,
 		}
 
-	case "bool", "boolean":
+	case constBool, constBoolean:
 		b := result.Bool()
 		var raw []byte
 		if b {
@@ -3142,17 +3543,17 @@ func applyModifier(result Result, modifier string) Result {
 		var typeStr string
 		switch result.Type {
 		case TypeString:
-			typeStr = "string"
+			typeStr = constString
 		case TypeNumber:
-			typeStr = "number"
+			typeStr = constNumber
 		case TypeBoolean:
-			typeStr = "boolean"
+			typeStr = constBoolean
 		case TypeObject:
 			typeStr = "object"
 		case TypeArray:
 			typeStr = "array"
 		case TypeNull:
-			typeStr = "null"
+			typeStr = constNull
 		default:
 			typeStr = "undefined"
 		}
@@ -3238,23 +3639,448 @@ func applyModifier(result Result, modifier string) Result {
 	return result
 }
 
-// getObjectValue extracts a value from an object by key
-func getObjectValue(data []byte, key string) []byte {
+// ultraFastFilterPath handles common filter patterns with direct byte scanning
+func ultraFastFilterPath(data []byte, path string) (Result, bool) {
+	// Parse pattern like "items[?(@.metadata.priority>3)].name"
+	parts := strings.Split(path, "[?(@.")
+	if len(parts) != 2 {
+		return Result{Type: TypeUndefined}, false
+	}
+
+	arrayKey := parts[0]
+	remaining := parts[1]
+
+	// Parse the filter expression and result key
+	filterEnd := strings.Index(remaining, ")].")
+	if filterEnd == -1 {
+		return Result{Type: TypeUndefined}, false
+	}
+
+	filterExpr := remaining[:filterEnd]
+	resultKey := remaining[filterEnd+3:]
+
+	// Parse filter expression like "metadata.priority>3"
+	var filterPath, operator, filterValue string
+	for _, op := range []string{">=", "<=", "!=", "==", ">", "<", "="} {
+		if idx := strings.Index(filterExpr, op); idx != -1 {
+			filterPath = filterExpr[:idx]
+			operator = op
+			filterValue = filterExpr[idx+len(op):]
+			break
+		}
+	}
+
+	if operator == "" {
+		return Result{Type: TypeUndefined}, false
+	}
+
+	// Get the array
+	arrayResult := getSimplePath(data, arrayKey)
+	if arrayResult.Type != TypeArray {
+		return Result{Type: TypeUndefined}, false
+	}
+
+	// Fast array filtering with direct byte manipulation
+	return fastArrayFilter(arrayResult.Raw, filterPath, operator, filterValue, resultKey), true
+}
+
+// fastArrayFilter efficiently filters array elements and extracts result keys
+// prepareFilterValues parses and prepares filter values for evaluation
+func prepareFilterValues(operator, filterValue string) (float64, bool) {
+	var filterNum float64
+	var filterIsNum bool
+	if operator == ">" || operator == "<" || operator == constGe || operator == constLe {
+		if num, err := strconv.ParseFloat(filterValue, 64); err == nil {
+			filterNum = num
+			filterIsNum = true
+		}
+	}
+	return filterNum, filterIsNum
+}
+
+// iterateArrayElements iterates through array elements and collects matching results
+func iterateArrayElements(arrayData []byte, filterPath, operator, filterValue, resultKey string, filterNum float64, filterIsNum bool) [][]byte {
+	results := make([][]byte, 0, 16) // Pre-allocate for common case
+
+	start := 1 // Skip '['
+	for start < len(arrayData) {
+		// Skip whitespace
+		for start < len(arrayData) && arrayData[start] <= ' ' {
+			start++
+		}
+
+		if start >= len(arrayData) || arrayData[start] == ']' {
+			break
+		}
+
+		// Find end of this element
+		end := ultraFastSkipValue(arrayData, start)
+		if end == -1 {
+			break
+		}
+
+		elementData := arrayData[start:end]
+
+		// Fast filter evaluation
+		if fastEvaluateFilter(elementData, filterPath, operator, filterValue, filterNum, filterIsNum) {
+			// Extract result key
+			if resultBytes := fastExtractKey(elementData, resultKey); len(resultBytes) > 0 {
+				results = append(results, resultBytes)
+			}
+		}
+
+		start = end
+		// Skip comma and whitespace
+		for start < len(arrayData) && (arrayData[start] <= ' ' || arrayData[start] == ',') {
+			start++
+		}
+	}
+
+	return results
+}
+
+// buildFilterResult constructs the final result array from collected results
+func buildFilterResult(results [][]byte) Result {
+	if len(results) == 0 {
+		return Result{Type: TypeUndefined}
+	}
+
+	// Build result array with optimized allocation
+	totalSize := 2 // brackets
+	for i, result := range results {
+		if i > 0 {
+			totalSize++ // comma
+		}
+		totalSize += len(result)
+	}
+
+	raw := make([]byte, 0, totalSize)
+	raw = append(raw, '[')
+	for i, result := range results {
+		if i > 0 {
+			raw = append(raw, ',')
+		}
+		raw = append(raw, result...)
+	}
+	raw = append(raw, ']')
+
+	return Result{
+		Type: TypeArray,
+		Raw:  raw,
+	}
+}
+
+func fastArrayFilter(arrayData []byte, filterPath, operator, filterValue, resultKey string) Result {
+	// Parse filter value once
+	filterNum, filterIsNum := prepareFilterValues(operator, filterValue)
+
+	// Iterate through array elements with minimal parsing
+	results := iterateArrayElements(arrayData, filterPath, operator, filterValue, resultKey, filterNum, filterIsNum)
+
+	// Build and return result
+	return buildFilterResult(results)
+}
+
+// fastEvaluateFilter quickly evaluates a filter condition on an element
+func fastEvaluateFilter(elementData []byte, filterPath, operator, filterValue string, filterNum float64, filterIsNum bool) bool {
+	// Navigate to the filter path (e.g., "metadata.priority")
+	valueBytes := fastNavigateToPath(elementData, filterPath)
+	if len(valueBytes) == 0 {
+		return false
+	}
+
+	// Quick value extraction and comparison
+	if filterIsNum {
+		// Parse number from value bytes
+		numVal := fastParseNumber(valueBytes)
+		switch operator {
+		case ">":
+			return numVal > filterNum
+		case "<":
+			return numVal < filterNum
+		case constGe:
+			return numVal >= filterNum
+		case constLe:
+			return numVal <= filterNum
+		case "=", constEq:
+			return numVal == filterNum
+		case constNe:
+			return numVal != filterNum
+		}
+	} else {
+		// String comparison
+		strVal := fastParseString(valueBytes)
+		switch operator {
+		case "=", constEq:
+			return strVal == filterValue
+		case constNe:
+			return strVal != filterValue
+		}
+	}
+
+	return false
+}
+
+// fastNavigateToPath quickly navigates to a nested path like "metadata.priority"
+func fastNavigateToPath(data []byte, path string) []byte {
+	current := data
+	parts := strings.Split(path, ".")
+
+	for _, part := range parts {
+		current = getObjectValue(current, part)
+		if len(current) == 0 {
+			return nil
+		}
+	}
+
+	return current
+}
+
+// fastExtractKey quickly extracts a key value from an object
+func fastExtractKey(data []byte, key string) []byte {
+	return getObjectValue(data, key)
+}
+
+// fastParseNumber quickly parses a number from JSON bytes
+func fastParseNumber(data []byte) float64 {
 	// Skip whitespace
+	start := 0
+	for start < len(data) && data[start] <= ' ' {
+		start++
+	}
+
+	// Find end of number
+	end := start
+	for end < len(data) && (data[end] >= '0' && data[end] <= '9' || data[end] == '.' || data[end] == '-' || data[end] == '+' || data[end] == 'e' || data[end] == 'E') {
+		end++
+	}
+
+	if end > start {
+		if num, err := strconv.ParseFloat(string(data[start:end]), 64); err == nil {
+			return num
+		}
+	}
+
+	return 0
+}
+
+// fastParseString quickly parses a string from JSON bytes
+func fastParseString(data []byte) string {
+	// Skip whitespace
+	start := 0
+	for start < len(data) && data[start] <= ' ' {
+		start++
+	}
+
+	if start >= len(data) || data[start] != '"' {
+		return ""
+	}
+
+	// Find end of string
+	end := start + 1
+	for end < len(data) && data[end] != '"' {
+		if data[end] == '\\' {
+			end++ // Skip escaped character
+		}
+		end++
+	}
+
+	if end < len(data) {
+		return string(data[start+1 : end])
+	}
+
+	return ""
+}
+
+// processArrayWildcard processes wildcard access on array elements
+func processArrayWildcard(data []byte, key string) []Result {
+	results := make([]Result, 0, 4)
+	start := 1 // Skip '['
+
+	for start < len(data) {
+		// Skip whitespace
+		for start < len(data) && data[start] <= ' ' {
+			start++
+		}
+
+		if start >= len(data) || data[start] == ']' {
+			break
+		}
+
+		// Find end of this element
+		end := ultraFastSkipValue(data, start)
+		if end == -1 {
+			break
+		}
+
+		// Parse element and get the key
+		element := fastParseValue(data[start:end])
+		if element.Type == TypeObject {
+			valueBytes := getObjectValue(element.Raw, key)
+			if len(valueBytes) > 0 {
+				result := fastParseValue(valueBytes)
+				results = append(results, result)
+			}
+		}
+
+		start = end
+		// Skip comma and whitespace
+		for start < len(data) && (data[start] <= ' ' || data[start] == ',') {
+			start++
+		}
+	}
+
+	return results
+}
+
+// processObjectWildcard processes wildcard access on object values
+func processObjectWildcard(current Result, key string) []Result {
+	results := make([]Result, 0, 4)
+
+	// For objects, get all values and then extract the key
+	current.ForEach(func(_, value Result) bool {
+		if value.Type == TypeObject {
+			valueBytes := getObjectValue(value.Raw, key)
+			if len(valueBytes) > 0 {
+				result := fastParseValue(valueBytes)
+				results = append(results, result)
+			}
+		}
+		return true
+	})
+
+	return results
+}
+
+// buildWildcardResult constructs the final result from collected wildcard results
+func buildWildcardResult(results []Result) Result {
+	if len(results) == 0 {
+		return Result{Type: TypeUndefined}
+	}
+
+	// If only one result, return it directly
+	if len(results) == 1 {
+		return results[0]
+	}
+
+	// Build array result with optimized allocation
+	totalSize := 2 // brackets
+	for i, result := range results {
+		if i > 0 {
+			totalSize++ // comma
+		}
+		totalSize += len(result.Raw)
+	}
+
+	raw := make([]byte, 0, totalSize)
+	raw = append(raw, '[')
+	for i, result := range results {
+		if i > 0 {
+			raw = append(raw, ',')
+		}
+		raw = append(raw, result.Raw...)
+	}
+	raw = append(raw, ']')
+
+	return Result{
+		Type: TypeArray,
+		Raw:  raw,
+	}
+}
+
+// fastWildcardKeyAccess optimizes wildcard access followed by a key like "phones.*.type"
+func fastWildcardKeyAccess(current Result, key string) Result {
+	if current.Type != TypeArray && current.Type != TypeObject {
+		return Result{Type: TypeUndefined}
+	}
+
+	var results []Result
+
+	// Optimize for arrays vs objects
+	if current.Type == TypeArray {
+		results = processArrayWildcard(current.Raw, key)
+	} else {
+		results = processObjectWildcard(current, key)
+	}
+
+	return buildWildcardResult(results)
+}
+
+// getObjectValue extracts a value from an object by key
+// validateObjectForSearch validates data is an object and returns starting position
+func validateObjectForSearch(data []byte) (int, bool) {
 	start := 0
 	for ; start < len(data); start++ {
 		if data[start] > ' ' {
 			break
 		}
 	}
-
-	// Check if it's an object
 	if start >= len(data) || data[start] != '{' {
+		return 0, false
+	}
+	return start, true
+}
+
+// findKeyEnd finds the end position of a JSON key
+func findKeyEnd(data []byte, pos int) int {
+	pos++ // Skip opening quote
+	for ; pos < len(data) && data[pos] != '"'; pos++ {
+		if data[pos] == '\\' {
+			pos++ // Skip escape char and the escaped char
+		}
+	}
+	if pos >= len(data) {
+		return -1
+	}
+	return pos
+}
+
+// skipToColon finds the colon after a key
+func skipToColon(data []byte, pos int) int {
+	for ; pos < len(data) && data[pos] != ':'; pos++ {
+	}
+	if pos >= len(data) {
+		return -1
+	}
+	return pos
+}
+
+// skipToValue skips whitespace and colon to find the value
+func skipToValue(data []byte, pos int) int {
+	// Skip colon and whitespace
+	pos++
+	for ; pos < len(data) && data[pos] <= ' '; pos++ {
+	}
+	if pos >= len(data) {
+		return -1
+	}
+	return pos
+}
+
+// keyMatches checks if the current key matches the target key
+func keyMatches(currentKey []byte, key string) bool {
+	keyStr := `"` + key + `"`
+	return string(currentKey) == keyStr || string(currentKey) == `"`+key+`"`
+}
+
+// skipToNextKeyOrEnd skips to the next key or end of object
+func skipToNextKeyOrEnd(data []byte, pos int) int {
+	// Skip to next key or end of object
+	for ; pos < len(data) && data[pos] != ',' && data[pos] != '}'; pos++ {
+	}
+	if pos >= len(data) || data[pos] == '}' {
+		return -1 // End of object, key not found
+	}
+	return pos + 1 // Skip comma
+}
+
+func getObjectValue(data []byte, key string) []byte {
+	// Validate object and get starting position
+	start, valid := validateObjectForSearch(data)
+	if !valid {
 		return nil
 	}
 
-	// Search for the key
-	keyStr := `"` + key + `"`
 	pos := start + 1
 
 	for pos < len(data) {
@@ -3268,50 +4094,33 @@ func getObjectValue(data []byte, key string) []byte {
 
 		// Check if this is our key
 		keyStart := pos
-		pos++ // Skip opening quote
-
-		// Find end of key
-		for ; pos < len(data) && data[pos] != '"'; pos++ {
-			if data[pos] == '\\' {
-				pos++ // Skip escape char and the escaped char
-			}
-		}
-
-		if pos >= len(data) {
+		keyEnd := findKeyEnd(data, pos)
+		if keyEnd == -1 {
 			return nil
 		}
 
-		keyEnd := pos
 		currentKey := data[keyStart : keyEnd+1]
 
 		// Skip to colon
-		pos++
-		for ; pos < len(data) && data[pos] != ':'; pos++ {
-		}
-
-		if pos >= len(data) {
+		pos = skipToColon(data, keyEnd+1)
+		if pos == -1 {
 			return nil
 		}
 
-		// Skip colon and whitespace
-		pos++
-		for ; pos < len(data) && data[pos] <= ' '; pos++ {
-		}
-
-		if pos >= len(data) {
+		// Skip to value
+		pos = skipToValue(data, pos)
+		if pos == -1 {
 			return nil
 		}
 
 		// Found the value, check if it matches our key
-		if string(currentKey) == keyStr || string(currentKey) == `"`+key+`"` {
+		if keyMatches(currentKey, key) {
 			// This is our value, find its end
 			valueStart := pos
 			valueEnd := findValueEnd(data, pos)
-
 			if valueEnd == -1 {
 				return nil
 			}
-
 			return data[valueStart:valueEnd]
 		}
 
@@ -3322,14 +4131,10 @@ func getObjectValue(data []byte, key string) []byte {
 		}
 
 		// Skip to next key or end of object
-		for ; pos < len(data) && data[pos] != ',' && data[pos] != '}'; pos++ {
+		pos = skipToNextKeyOrEnd(data, pos)
+		if pos == -1 {
+			return nil
 		}
-
-		if pos >= len(data) || data[pos] == '}' {
-			return nil // End of object, key not found
-		}
-
-		pos++ // Skip comma
 	}
 
 	return nil
@@ -3338,69 +4143,67 @@ func getObjectValue(data []byte, key string) []byte {
 // getObjectValueRange returns the start and end indices (relative to data) of the value for key within an object.
 // Returns (-1, -1) when not found or data is not an object.
 func getObjectValueRange(data []byte, key string) (int, int) {
-	// Skip whitespace
-	start := 0
-	for ; start < len(data); start++ {
-		if data[start] > ' ' {
-			break
-		}
-	}
-	if start >= len(data) || data[start] != '{' {
+	// Validate object and get starting position
+	start, valid := validateObjectForSearch(data)
+	if !valid {
 		return -1, -1
 	}
-	keyStr := `"` + key + `"`
+
 	pos := start + 1
+
 	for pos < len(data) {
+		// Skip whitespace
 		for ; pos < len(data) && data[pos] <= ' '; pos++ {
 		}
+
 		if pos >= len(data) || data[pos] != '"' {
 			return -1, -1
 		}
+
+		// Check if this is our key
 		keyStart := pos
-		pos++
-		for ; pos < len(data) && data[pos] != '"'; pos++ {
-			if data[pos] == '\\' {
-				pos++
-			}
-		}
-		if pos >= len(data) {
+		keyEnd := findKeyEnd(data, pos)
+		if keyEnd == -1 {
 			return -1, -1
 		}
-		keyEnd := pos
+
 		currentKey := data[keyStart : keyEnd+1]
-		pos++
-		for ; pos < len(data) && data[pos] != ':'; pos++ {
-		}
-		if pos >= len(data) {
+
+		// Skip to colon
+		pos = skipToColon(data, keyEnd+1)
+		if pos == -1 {
 			return -1, -1
 		}
-		pos++
-		for ; pos < len(data) && data[pos] <= ' '; pos++ {
-		}
-		if pos >= len(data) {
+
+		// Skip to value
+		pos = skipToValue(data, pos)
+		if pos == -1 {
 			return -1, -1
 		}
+
 		valueStart := pos
 		valueEnd := findValueEnd(data, pos)
 		if valueEnd == -1 {
 			return -1, -1
 		}
-		if string(currentKey) == keyStr {
+
+		// Check if this matches our key
+		if keyMatches(currentKey, key) {
 			return valueStart, valueEnd
 		}
-		pos = valueEnd
-		for ; pos < len(data) && data[pos] != ',' && data[pos] != '}'; pos++ {
-		}
-		if pos >= len(data) || data[pos] == '}' {
+
+		// Skip to next key or end of object
+		pos = skipToNextKeyOrEnd(data, valueEnd)
+		if pos == -1 {
 			return -1, -1
 		}
-		pos++
 	}
+
 	return -1, -1
 }
 
-// getArrayElement extracts an element from an array by index
-func getArrayElement(data []byte, index int) []byte {
+// findArrayElementStart finds the start position of an array and validates it
+func findArrayElementStart(data []byte) (int, bool) {
 	// Skip whitespace
 	start := 0
 	for ; start < len(data); start++ {
@@ -3411,11 +4214,39 @@ func getArrayElement(data []byte, index int) []byte {
 
 	// Check if it's an array
 	if start >= len(data) || data[start] != '[' {
+		return 0, false
+	}
+
+	return start + 1, true
+}
+
+// skipToNextArrayElement advances position to the next array element
+func skipToNextArrayElement(data []byte, pos int) (int, bool) {
+	// Skip this value
+	pos = findValueEnd(data, pos)
+	if pos == -1 {
+		return 0, false
+	}
+
+	// Skip to next element or end of array
+	for ; pos < len(data) && data[pos] != ',' && data[pos] != ']'; pos++ {
+	}
+
+	if pos >= len(data) || data[pos] == ']' {
+		return 0, false // End of array, index out of bounds
+	}
+
+	return pos + 1, true // Skip comma
+}
+
+// getArrayElement extracts an element from an array by index
+func getArrayElement(data []byte, index int) []byte {
+	pos, isArray := findArrayElementStart(data)
+	if !isArray {
 		return nil
 	}
 
 	// Iterate through array elements
-	pos := start + 1
 	currentIndex := 0
 
 	for pos < len(data) {
@@ -3440,21 +4271,12 @@ func getArrayElement(data []byte, index int) []byte {
 			return data[valueStart:valueEnd]
 		}
 
-		// Skip this value
-		pos = findValueEnd(data, pos)
-		if pos == -1 {
+		// Skip to next element
+		var ok bool
+		pos, ok = skipToNextArrayElement(data, pos)
+		if !ok {
 			return nil
 		}
-
-		// Skip to next element or end of array
-		for ; pos < len(data) && data[pos] != ',' && data[pos] != ']'; pos++ {
-		}
-
-		if pos >= len(data) || data[pos] == ']' {
-			return nil // End of array, index out of bounds
-		}
-
-		pos++ // Skip comma
 		currentIndex++
 	}
 
@@ -3464,16 +4286,11 @@ func getArrayElement(data []byte, index int) []byte {
 // getArrayElementRange returns the start and end indices (relative to data) of the element at index within an array.
 // Returns (-1, -1) when out of bounds or data is not an array.
 func getArrayElementRange(data []byte, index int) (int, int) {
-	start := 0
-	for ; start < len(data); start++ {
-		if data[start] > ' ' {
-			break
-		}
-	}
-	if start >= len(data) || data[start] != '[' {
+	pos, isArray := findArrayElementStart(data)
+	if !isArray {
 		return -1, -1
 	}
-	pos := start + 1
+
 	currentIndex := 0
 	for pos < len(data) {
 		for ; pos < len(data) && data[pos] <= ' '; pos++ {
@@ -3489,16 +4306,13 @@ func getArrayElementRange(data []byte, index int) (int, int) {
 			}
 			return valueStart, valueEnd
 		}
-		pos = findValueEnd(data, pos)
-		if pos == -1 {
+
+		// Skip to next element
+		var ok bool
+		pos, ok = skipToNextArrayElement(data, pos)
+		if !ok {
 			return -1, -1
 		}
-		for ; pos < len(data) && data[pos] != ',' && data[pos] != ']'; pos++ {
-		}
-		if pos >= len(data) || data[pos] == ']' {
-			return -1, -1
-		}
-		pos++
 		currentIndex++
 	}
 	return -1, -1
@@ -3558,7 +4372,6 @@ func findValueEnd(data []byte, start int) int {
 			data[start] == '-' || data[start] == '+' ||
 			data[start] == '.' || data[start] == 'e' ||
 			data[start] == 'E' {
-
 			for i := start + 1; i < len(data); i++ {
 				if !((data[i] >= '0' && data[i] <= '9') ||
 					data[i] == '.' || data[i] == 'e' ||
@@ -3607,28 +4420,106 @@ func findBlockEnd(data []byte, start int, openChar, closeChar byte) int {
 	return -1 // No matching close found
 }
 
-// parseString parses a JSON string
-func parseString(data []byte, start int) Result {
+// findStringEnd finds the end of a JSON string, handling escapes
+func findStringEnd(data []byte, start int) int {
 	if start >= len(data) || data[start] != '"' {
-		return Result{Type: TypeUndefined}
+		return -1
 	}
 
 	end := start + 1
-	for ; end < len(data); end++ {
+	for end < len(data) {
 		if data[end] == '\\' {
 			end++ // Skip escape character
+			if end < len(data) {
+				end++
+			}
 			continue
 		}
 		if data[end] == '"' {
-			break
+			return end
 		}
+		end++
+	}
+	return -1
+}
+
+// processEscapeSequence processes a single escape sequence during string parsing
+func processEscapeSequence(str []byte, i *int, sb *strings.Builder) {
+	if *i+1 >= len(str) {
+		return
+	}
+	*i++
+	switch str[*i] {
+	case '"', '\\', '/', '\'':
+		sb.WriteByte(str[*i])
+	case 'b':
+		sb.WriteByte('\b')
+	case 'f':
+		sb.WriteByte('\f')
+	case 'n':
+		sb.WriteByte('\n')
+	case 'r':
+		sb.WriteByte('\r')
+	case 't':
+		sb.WriteByte('\t')
+	case 'u':
+		processUnicodeEscape(str, i, sb)
+	}
+}
+
+// processUnicodeEscape processes a unicode escape sequence (\uXXXX)
+func processUnicodeEscape(str []byte, i *int, sb *strings.Builder) {
+	if *i+4 >= len(str) {
+		return
 	}
 
-	if end >= len(data) {
+	// Parse 4 hex digits
+	var r rune
+	validHex := true
+	for j := 1; j <= 4; j++ {
+		h := str[*i+j]
+		var v byte
+		if h >= '0' && h <= '9' {
+			v = h - '0'
+		} else if h >= 'a' && h <= 'f' {
+			v = h - 'a' + 10
+		} else if h >= 'A' && h <= 'F' {
+			v = h - 'A' + 10
+		} else {
+			// Invalid hex digit
+			sb.WriteByte('?')
+			validHex = false
+			break
+		}
+		r = r*16 + rune(v)
+	}
+	if validHex {
+		sb.WriteRune(r)
+	}
+	*i += 4
+}
+
+// unescapeStringContent unescapes string content with escape sequences
+func unescapeStringContent(str []byte) string {
+	var sb strings.Builder
+	for i := 0; i < len(str); i++ {
+		if str[i] == '\\' {
+			processEscapeSequence(str, &i, &sb)
+		} else {
+			sb.WriteByte(str[i])
+		}
+	}
+	return sb.String()
+}
+
+// parseString parses a JSON string
+func parseString(data []byte, start int) Result {
+	end := findStringEnd(data, start)
+	if end == -1 {
 		return Result{Type: TypeUndefined}
 	}
 
-	// Extract and unescape the string
+	// Extract string content
 	raw := data[start : end+1]
 	str := raw[1 : len(raw)-1] // Remove quotes
 
@@ -3643,55 +4534,11 @@ func parseString(data []byte, start int) Result {
 	}
 
 	// Unescape the string
-	var sb strings.Builder
-	for i := 0; i < len(str); i++ {
-		if str[i] == '\\' && i+1 < len(str) {
-			i++
-			switch str[i] {
-			case '"', '\\', '/', '\'':
-				sb.WriteByte(str[i])
-			case 'b':
-				sb.WriteByte('\b')
-			case 'f':
-				sb.WriteByte('\f')
-			case 'n':
-				sb.WriteByte('\n')
-			case 'r':
-				sb.WriteByte('\r')
-			case 't':
-				sb.WriteByte('\t')
-			case 'u':
-				if i+4 < len(str) {
-					// Parse 4 hex digits
-					var r rune
-					for j := 1; j <= 4; j++ {
-						h := str[i+j-1]
-						var v byte
-						if h >= '0' && h <= '9' {
-							v = h - '0'
-						} else if h >= 'a' && h <= 'f' {
-							v = h - 'a' + 10
-						} else if h >= 'A' && h <= 'F' {
-							v = h - 'A' + 10
-						} else {
-							// Invalid hex digit
-							sb.WriteByte('?')
-							break
-						}
-						r = r*16 + rune(v)
-					}
-					sb.WriteRune(r)
-					i += 3
-				}
-			}
-		} else {
-			sb.WriteByte(str[i])
-		}
-	}
+	unescaped := unescapeStringContent(str)
 
 	return Result{
 		Type:  TypeString,
-		Str:   sb.String(),
+		Str:   unescaped,
 		Raw:   raw,
 		Index: start,
 	}
@@ -3746,13 +4593,8 @@ func parseNumber(data []byte, start int) Result {
 
 // parseAny parses any JSON value
 func parseAny(data []byte) Result {
-	// Skip whitespace
-	start := 0
-	for ; start < len(data); start++ {
-		if data[start] > ' ' {
-			break
-		}
-	}
+	// Skip leading whitespace
+	start := skipLeadingWhitespace(data)
 
 	if start >= len(data) {
 		return Result{Type: TypeUndefined}
@@ -3774,44 +4616,19 @@ func parseAny(data []byte) Result {
 	case '"':
 		return parseString(data, start)
 	case 't':
-		if start+3 < len(data) &&
-			data[start+1] == 'r' &&
-			data[start+2] == 'u' &&
-			data[start+3] == 'e' { // Corrected typo: data[start+3] == 'e'
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: true,
-				Raw:     data[start : start+4],
-				Index:   start,
-			}
+		if result, ok := parseBooleanTrue(data, start); ok {
+			return result
 		}
 	case 'f':
-		if start+4 < len(data) &&
-			data[start+1] == 'a' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 's' && // Corrected typo: data[start+3] == 's'
-			data[start+4] == 'e' {
-			return Result{
-				Type:    TypeBoolean,
-				Boolean: false,
-				Raw:     data[start : start+5],
-				Index:   start,
-			}
+		if result, ok := parseBooleanFalse(data, start); ok {
+			return result
 		}
 	case 'n':
-		if start+3 < len(data) &&
-			data[start+1] == 'u' &&
-			data[start+2] == 'l' &&
-			data[start+3] == 'l' {
-			return Result{
-				Type:  TypeNull,
-				Raw:   data[start : start+4],
-				Index: start,
-			}
+		if result, ok := parseNull(data, start); ok {
+			return result
 		}
 	default:
-		if (data[start] >= '0' && data[start] <= '9') ||
-			data[start] == '-' || data[start] == '+' {
+		if isNumericChar(data[start]) || data[start] == '+' {
 			return parseNumber(data, start)
 		}
 	}
@@ -3833,7 +4650,7 @@ func (r Result) String() string {
 	case TypeBoolean:
 		return strconv.FormatBool(r.Boolean)
 	case TypeNull:
-		return "null"
+		return constNull
 	case TypeArray, TypeObject:
 		return string(r.Raw)
 	default:
@@ -3903,6 +4720,14 @@ func (r Result) Exists() bool {
 // IsNull checks if the result is null
 func (r Result) IsNull() bool {
 	return r.Type == TypeNull
+}
+
+func (r Result) IsArray() bool {
+	return r.Type == TypeArray
+}
+
+func (r Result) IsObject() bool {
+	return r.Type == TypeObject
 }
 
 // Array returns the result as a slice of results

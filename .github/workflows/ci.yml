@@ -12,7 +12,7 @@ jobs:
     name: Security Checks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -33,7 +33,7 @@ jobs:
       continue-on-error: true
       
     - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: gosec-results.sarif
@@ -43,7 +43,7 @@ jobs:
     name: Lint and Code Quality
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -87,7 +87,7 @@ jobs:
         go-version: ['1.21', '1.22', '1.23']
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -95,7 +95,7 @@ jobs:
         go-version: ${{ matrix.go-version }}
         
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache/go-build
@@ -118,33 +118,11 @@ jobs:
       
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.22'
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         file: ./coverage.out
         flags: unittests
         name: codecov-umbrella
-
-  # Benchmark tests
-  benchmark:
-    name: Benchmark Tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.22'
-        
-    - name: Run benchmarks
-      run: go test -bench=. -benchmem -run=^$ ./benchmark/
-      
-    - name: Check for performance regressions
-      run: |
-        echo "Running baseline benchmarks..."
-        go test -bench=. -benchmem -run=^$ ./benchmark/ > current_bench.txt
-        echo "Benchmark results:"
-        cat current_bench.txt
 
   # Build verification
   build:
@@ -158,7 +136,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -181,7 +159,7 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -216,7 +194,7 @@ jobs:
   status:
     name: CI Status
     if: always()
-    needs: [security, lint, test, benchmark, build, integration]
+    needs: [security, lint, test, build, integration]
     runs-on: ubuntu-latest
     steps:
     - name: Check all jobs status

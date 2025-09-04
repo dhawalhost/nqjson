@@ -1,0 +1,50 @@
+# golangci-lint configuration for pre-commit (more lenient)
+run:
+  timeout: 2m
+  issues-exit-code: 1
+  tests: true
+  modules-download-mode: readonly
+
+output:
+  formats:
+    - format: colored-line-number
+      path: stdout
+
+linters-settings:
+  gocyclo:
+    min-complexity: 20  # More lenient for pre-commit
+  # lll:
+  #   line-length: 200    # More lenient for pre-commit
+
+linters:
+  disable-all: true
+  enable:
+    # Critical linters that should block commits
+    - errcheck
+    - gosec
+    - govet
+    - staticcheck
+    - typecheck
+    - ineffassign
+    - gofmt
+    - goimports
+
+issues:
+  exclude-dirs:
+    - vendor
+  exclude-files:
+    - ".*_test.go"
+  exclude-rules:
+    # Exclude some linters from running on tests files.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+
+    # Exclude unsafe usage warnings - we need them for performance
+    - linters:
+        - gosec
+      text: "G103: Use of unsafe calls should be audited"
+
+  max-issues-per-linter: 20
+  max-same-issues: 10

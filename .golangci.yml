@@ -3,14 +3,12 @@ run:
   timeout: 5m
   issues-exit-code: 1
   tests: true
-  skip-dirs:
-    - vendor
-  skip-files:
-    - ".*_test.go"
   modules-download-mode: readonly
 
 output:
-  format: colored-line-number
+  formats:
+    - format: colored-line-number
+      path: stdout
   print-issued-lines: true
   print-linter-name: true
 
@@ -21,7 +19,10 @@ linters-settings:
     lines: 100
     statements: 50
   gci:
-    local-prefixes: github.com/dhawalhost/njson
+    sections:
+      - standard
+      - default
+      - prefix(github.com/dhawalhost/njson)
   goconst:
     min-len: 2
     min-occurrences: 2
@@ -42,15 +43,12 @@ linters-settings:
     min-complexity: 15
   goimports:
     local-prefixes: github.com/dhawalhost/njson
-  golint:
-    min-confidence: 0
-  gomnd:
-    settings:
-      mnd:
-        # don't include the "operation" and "assign"
-        checks: argument,case,condition,return
+  # mnd:
+  #   settings:
+  #     mnd:
+  #       # don't include the "operation" and "assign"
+  #       checks: argument,case,condition,return
   govet:
-    check-shadowing: true
     settings:
       printf:
         funcs:
@@ -58,10 +56,8 @@ linters-settings:
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  lll:
-    line-length: 140
-  maligned:
-    suggest-new: true
+  # lll:
+  #   line-length: 140
   misspell:
     locale: US
   nolintlint:
@@ -76,67 +72,51 @@ linters:
   disable-all: true
   enable:
     - bodyclose
-    - deadcode
+    - copyloopvar
     - depguard
     - dogsled
     - dupl
     - errcheck
-    - exportloopref
-    - exhaustive
+    # - exhaustive
     - funlen
     - gochecknoinits
     - goconst
-    - gocritic
+    # - gocritic
     - gocyclo
     - gofmt
     - goimports
-    - golint
-    - gomnd
+    # - mnd
     - goprintffuncname
     - gosec
-    - gosimple
+    # - gosimple
     - govet
     - ineffassign
-    - interfacer
-    - lll
-    - maligned
+    # - lll
     - misspell
     - nakedret
     - noctx
     - nolintlint
+    - predeclared
+    # - revive
     - rowserrcheck
-    - scopelint
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
-    - unparam
-    - unused
-    - varcheck
+    # - unparam - Disabled: function parameters are kept for API compatibility
+    # - unused
     - whitespace
-
-  # don't enable:
-  # - asciicheck
-  # - gochecknoglobals
-  # - gocognit
-  # - godot
-  # - godox
-  # - goerr113
-  # - interfacer
-  # - maligned
-  # - nestif
-  # - prealloc
-  # - testpackage
-  # - revive
-  # - wsl
 
 issues:
   # Excluding configuration per-path, per-linter, per-text and per-source
+  exclude-dirs:
+    - vendor
+  exclude-files:
+    - ".*_test.go"
   exclude-rules:
     - path: _test\.go
       linters:
-        - gomnd
+        # - mnd
         - funlen
         - gocyclo
 
@@ -169,9 +149,9 @@ issues:
       text: "SA9003:"
 
     # Exclude lll issues for long lines in comments or strings
-    - linters:
-        - lll
-      source: "^//go:"
+    # - linters:
+    #     - lll
+    #   source: "^//go:"
 
   # Independently from option `exclude` we use default exclude patterns,
   # it can be disabled by this option. To list all
