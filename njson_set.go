@@ -2022,8 +2022,6 @@ func readNextDeletionPair(data []byte, pos int, start int) (pairStart int, key [
 	np := skipSpaces(data, ve)
 	if np < len(data) && data[np] == ',' {
 		np++
-	} else if np < len(data) && data[np] == '}' {
-		// end reached; will signal done on next loop
 	}
 
 	return pairStart, keyBytes, ve, np, false, true
