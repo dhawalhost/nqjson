@@ -70,8 +70,8 @@ security:
 	@echo "Checking for vulnerabilities..."
 	govulncheck ./...
 	@echo "Running gosec..."
-	gosec -fmt sarif -out gosec-results.sarif ./... || true
-	@echo "Security scan complete. Check gosec-results.sarif for detailed results."
+	gosec -fmt text ./... || true
+	@echo "Security scan complete. Review output above for details."
 
 # Build verification
 build:
@@ -91,7 +91,7 @@ tidy:
 # Clean up
 clean:
 	@echo "Cleaning up..."
-	rm -f coverage.out coverage.html gosec-results.sarif
+	rm -f coverage.out coverage.html
 	go clean -testcache
 
 # Run all CI checks locally
