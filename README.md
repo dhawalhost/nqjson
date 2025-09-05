@@ -50,6 +50,17 @@ njson outperforms popular JSON libraries in most benchmarks:
 go get github.com/dhawalhost/njson
 ```
 
+## 🧩 Go version compatibility
+
+Choose the njson version based on your Go toolchain:
+
+- Go versions below 1.23.10: use njson v1.3.1
+    - Install: `go get github.com/dhawalhost/njson@v1.3.1`
+- Go versions 1.23.10 and above: use the latest njson version
+    - Install: `go get github.com/dhawalhost/njson@latest`
+
+The public API remains consistent; this guidance ensures optimal compatibility with your Go version.
+
 ## � Documentation
 
 - **[API Reference](API.md)** - Complete API documentation with all methods and types
