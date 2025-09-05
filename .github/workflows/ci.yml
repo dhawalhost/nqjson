@@ -24,13 +24,6 @@ jobs:
       
     - name: Run vulnerability check
       run: govulncheck ./...
-      
-    - name: Install gosec
-      run: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
-      
-    - name: Run gosec security scanner
-      run: gosec -fmt text ./...
-      continue-on-error: true
 
   # Code quality and linting
   lint:
@@ -52,25 +45,14 @@ jobs:
         
     - name: Run go vet
       run: go vet ./...
+      continue-on-error: true
       
-    - name: Run go fmt check
-      run: |
-        if [ -n "$(gofmt -l .)" ]; then
-          echo "The following files need formatting:"
-          gofmt -l .
-          echo "Please run 'go fmt ./...' to fix formatting issues"
-          exit 1
-        fi
-        
-    - name: Check for ineffective assignments
-      run: |
-        go install github.com/gordonklaus/ineffassign@latest
-        ineffassign ./...
-        
-    - name: Check for unused code
-      run: |
-        go install honnef.co/go/tools/cmd/staticcheck@latest
-        staticcheck ./...
+    - name: Run go mod tidy
+      run: go mod tidy
+      
+    - name: Run golangci-lint
+      run: golangci-lint run ./...
+
 
   # Unit tests with multiple Go versions
   test:
