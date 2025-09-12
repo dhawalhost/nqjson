@@ -1419,16 +1419,85 @@ type filterExpr struct {
 	value string
 }
 
-// parseModifiers extracts and parses modifier tokens from a path
+// parseModifiers extracts and parses modifier tokens from a path.
+// Supports both legacy '|' and JSONPath-like '@' suffix modifiers.
+// For '@', only treat as a modifier separator when not inside strings/brackets/parentheses
+// and not immediately following a '.'. This preserves cases like "users.@length" as invalid
+// path segments and avoids interference with filter "@.field" usage.
 func parseModifiers(path string) ([]pathToken, string) {
 	var modifiers []pathToken
-	modifierIdx := strings.IndexByte(path, '|')
-	if modifierIdx < 0 {
+
+	// Fast path: if neither '|' nor '@' present, return early
+	if !strings.ContainsAny(path, "|@") {
 		return modifiers, path
 	}
 
-	modifierParts := strings.Split(path[modifierIdx+1:], "|")
-	for _, part := range modifierParts {
+	// Scan for the first valid modifier separator position
+	sepIdx := -1
+	bracketDepth := 0
+	parenDepth := 0
+	inString := false
+	var stringQuote byte
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if inString {
+			if c == '\\' {
+				// skip escaped char
+				i++
+				continue
+			}
+			if c == stringQuote {
+				inString = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inString = true
+			stringQuote = c
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '|':
+			if bracketDepth == 0 && parenDepth == 0 {
+				sepIdx = i
+				i = len(path) // break
+			}
+		case '@':
+			if bracketDepth == 0 && parenDepth == 0 {
+				// Only treat as modifier if not immediately after a dot
+				if i > 0 && path[i-1] != '.' {
+					sepIdx = i
+					i = len(path) // break
+				}
+			}
+		}
+	}
+
+	if sepIdx < 0 {
+		return modifiers, path
+	}
+
+	// Extract suffix with modifiers and the main path
+	suffix := path[sepIdx+1:]
+	cleanPath := path[:sepIdx]
+
+	// Split suffix by either '|' or '@'
+	fields := strings.FieldsFunc(suffix, func(r rune) bool { return r == '|' || r == '@' })
+	for _, part := range fields {
+		if part == "" {
+			continue
+		}
 		parts := strings.SplitN(part, ":", 2)
 		mod := pathToken{kind: tokenModifier, str: parts[0]}
 		if len(parts) > 1 {
@@ -1437,7 +1506,7 @@ func parseModifiers(path string) ([]pathToken, string) {
 		modifiers = append(modifiers, mod)
 	}
 
-	return modifiers, path[:modifierIdx]
+	return modifiers, cleanPath
 }
 
 // parseArrayAccess parses array access syntax in path parts
@@ -1451,13 +1520,14 @@ func parseArrayAccess(part string) []pathToken {
 
 	bracket := part[strings.IndexByte(part, '[')+1 : len(part)-1]
 
-	if bracket == "*" {
+	if bracket == "*" || bracket == "#" {
 		tokens = append(tokens, pathToken{kind: tokenWildcard})
 	} else if idx, err := strconv.Atoi(bracket); err == nil {
 		tokens = append(tokens, pathToken{kind: tokenIndex, num: idx})
 	} else if strings.HasPrefix(bracket, "?") || strings.Contains(bracket, "==") ||
 		strings.Contains(bracket, "!=") || strings.Contains(bracket, ">=") ||
-		strings.Contains(bracket, "<=") {
+		strings.Contains(bracket, "<=") || strings.Contains(bracket, ">") ||
+		strings.Contains(bracket, "<") || strings.Contains(bracket, "=~") {
 		// Parse filter expression
 		filter := parseFilterExpression(bracket)
 		tokens = append(tokens, pathToken{kind: tokenFilter, filter: filter})
@@ -1473,15 +1543,68 @@ func tokenizePath(path string) []pathToken {
 	// Check for modifiers
 	modifiers, cleanPath := parseModifiers(path)
 
-	// Split the path
-	parts := strings.Split(cleanPath, ".")
+	// Split the path on dots, but respect brackets and parentheses so that
+	// dots inside filters like [?( @.age>28 )] don't split the segment.
+	var parts []string
+	var cur strings.Builder
+	bracketDepth := 0
+	parenDepth := 0
+	inString := false
+	var stringQuote byte
+	for i := 0; i < len(cleanPath); i++ {
+		c := cleanPath[i]
+		if inString {
+			cur.WriteByte(c)
+			if c == '\\' { // escape next char
+				if i+1 < len(cleanPath) {
+					i++
+					cur.WriteByte(cleanPath[i])
+				}
+				continue
+			}
+			if c == stringQuote {
+				inString = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inString = true
+			stringQuote = c
+			cur.WriteByte(c)
+			continue
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '.':
+			if bracketDepth == 0 && parenDepth == 0 {
+				parts = append(parts, cur.String())
+				cur.Reset()
+				continue
+			}
+		}
+		cur.WriteByte(c)
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
 
 	for _, part := range parts {
 		if part == "" {
 			continue
 		}
 
-		if part == "*" {
+		if part == "*" || part == "#" {
 			tokens = append(tokens, pathToken{kind: tokenWildcard})
 			continue
 		}
@@ -1573,7 +1696,9 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 	for i, token := range pathTokens {
 		result, shouldReturn := processPathToken(current, token, pathTokens, i)
 		if shouldReturn {
-			return result
+			// Use the result and stop processing more tokens; modifiers will be applied below
+			current = result
+			break
 		}
 		current = result
 
@@ -1610,6 +1735,13 @@ func separateModifierTokens(tokens []pathToken) ([]pathToken, []pathToken) {
 func processPathToken(current Result, token pathToken, pathTokens []pathToken, i int) (Result, bool) {
 	switch token.kind {
 	case tokenKey:
+		// If current is an array due to wildcard/filter, project key over elements
+		if current.Type == TypeArray && i > 0 {
+			prev := pathTokens[i-1]
+			if prev.kind == tokenWildcard || prev.kind == tokenFilter {
+				return processArrayProjection(current, pathTokens, i)
+			}
+		}
 		return processKeyToken(current, token)
 	case tokenIndex:
 		return processIndexToken(current, token)
@@ -1759,6 +1891,55 @@ func processRemainingTokensForWildcard(values []Result, pathTokens []pathToken, 
 		Type: TypeArray,
 		Raw:  raw.Bytes(),
 	}, true // Skip remaining tokens as we've processed them
+}
+
+// processArrayProjection applies the remaining tokens starting at index i to each
+// element of the current array and combines the results into a single array.
+func processArrayProjection(current Result, pathTokens []pathToken, i int) (Result, bool) {
+	// Collect all values first
+	values := make([]Result, 0, 8)
+	current.ForEach(func(_, value Result) bool {
+		values = append(values, value)
+		return true
+	})
+
+	if len(values) == 0 {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Apply remaining tokens (including current token) to each element
+	var results []Result
+	for _, val := range values {
+		remaining := executeTokenizedPath(val.Raw, pathTokens[i:])
+		if remaining.Exists() {
+			if remaining.Type == TypeArray {
+				// Merge array items
+				remaining.ForEach(func(_, item Result) bool {
+					results = append(results, item)
+					return true
+				})
+			} else {
+				results = append(results, remaining)
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Build array result
+	var raw bytes.Buffer
+	raw.WriteByte('[')
+	for i, val := range results {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		raw.Write(val.Raw)
+	}
+	raw.WriteByte(']')
+
+	return Result{Type: TypeArray, Raw: raw.Bytes()}, true
 }
 
 // processFilterToken handles filter token processing
@@ -2004,6 +2185,8 @@ func applyModifier(result Result, modifier string) Result {
 		return applyUpperModifier(result)
 	case "join":
 		return applyJoinModifier(result, arg)
+	case "reverse":
+		return applyReverseModifier(result)
 	}
 
 	// Return original result if no modifier was applied
@@ -2259,6 +2442,28 @@ func applyJoinModifier(result Result, arg string) Result {
 		}
 	}
 	return result
+}
+
+// applyReverseModifier reverses array elements order
+func applyReverseModifier(result Result) Result {
+	if result.Type != TypeArray {
+		// No-op for non-arrays
+		return result
+	}
+	// Collect elements
+	var values []Result
+	result.ForEach(func(_, value Result) bool {
+		values = append(values, value)
+		return true
+	})
+	// Reverse in place
+	for i, j := 0, len(values)-1; i < j; i, j = i+1, j-1 {
+		values[i], values[j] = values[j], values[i]
+	}
+	// Build array raw
+	reversed := buildWildcardResult(values)
+	reversed.Modified = true
+	return reversed
 }
 
 // processArrayWildcard processes wildcard access on array elements
@@ -3377,7 +3582,7 @@ func handleLeadingNumber(path string, p int) (int, bool) {
 func scanKey(path string, p int) (int, bool) {
 	keyStart := p
 	for p < len(path) && path[p] != '.' && path[p] != '[' {
-		if path[p] == '*' || path[p] == '?' {
+		if path[p] == '*' || path[p] == '?' || path[p] == '#' {
 			return p, false
 		}
 		p++
@@ -3396,11 +3601,15 @@ func scanIndex(path string, p int) (int, bool) {
 		return p, false
 	}
 	idxStart := p
-	for p < len(path) && path[p] >= '0' && path[p] <= '9' {
+	if path[p] == '*' || path[p] == '#' { // wildcard
 		p++
-	}
-	if p == idxStart {
-		return p, false
+	} else {
+		for p < len(path) && path[p] >= '0' && path[p] <= '9' {
+			p++
+		}
+		if p == idxStart {
+			return p, false
+		}
 	}
 	if p >= len(path) || path[p] != ']' {
 		return p, false

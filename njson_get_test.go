@@ -1148,10 +1148,10 @@ func TestComplexPathOperations(t *testing.T) {
 		{"wildcard_nested", "products.electronics.*.name", true},
 
 		// Edge cases that should trigger complex path processing but not exist
-		{"filter_active_users", "users[?(@.active==true)].name", false},
-		{"filter_by_age", "users[?(@.age>30)].name", false},
+		{"filter_active_users", "users[?(@.active==true)].name", true},
+		{"filter_by_age", "users[?(@.age>30)].name", true},
 		{"recursive_search_name", "..name", false},
-		{"modifier_length", "users.@length", false},
+		{"modifier_length_invalid_syntax", "users.@length", false},
 		{"array_slice", "users[0:2].name", false},
 		{"array_negative_index", "users[-1].name", false},
 		{"invalid_modifier", "users.@invalid", false},
@@ -1174,6 +1174,30 @@ func TestComplexPathOperations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestModifierReverse(t *testing.T) {
+	data := []byte(`{"items":[1,2,3,4],"users":[{"name":"a"},{"name":"b"},{"name":"c"}]}`)
+
+	// Reverse a simple array
+	res := Get(data, "items.#@reverse")
+	if !res.Exists() || res.Type != TypeArray {
+		t.Fatalf("expected array result, got %#v", res)
+	}
+	got := res.Array()
+	if len(got) != 4 || got[0].Int() != 4 || got[1].Int() != 3 || got[2].Int() != 2 || got[3].Int() != 1 {
+		t.Fatalf("reverse failed, got %v", res.String())
+	}
+
+	// Reverse projected names
+	res2 := Get(data, "users.#.name@reverse")
+	if !res2.Exists() || res2.Type != TypeArray {
+		t.Fatalf("expected array for projected reverse, got %#v", res2)
+	}
+	arr2 := res2.Array()
+	if len(arr2) != 3 || arr2[0].String() != "c" || arr2[1].String() != "b" || arr2[2].String() != "a" {
+		t.Fatalf("projected reverse failed, got %v", res2.String())
 	}
 }
 
