@@ -1,6 +1,8 @@
 # NJSON
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/njson)](https://goreportcard.com/report/github.com/dhawalhost/njson) [![GoDoc](https://godoc.org/github.com/dhawalhost/njson?status.svg)](https://godoc.org/github.com/dhawalhost/njson)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/njson)](https://goreportcard.com/report/github.com/dhawalhost/njson) [![GoDoc](https://godoc.org/github.com/dhawalhost/njson?status.svg)](https://godoc.org/github.com/dhawalhost/njson) [![Static Badge](https://img.shields.io/badge/njson-playground-blue)](https://dhawalhost.github.io/njson-playground/)
+
+
 
 ## 📖 Documentation
 
