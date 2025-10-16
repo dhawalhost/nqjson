@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <!-- GitHub Social Preview / OG Image -->
+  <defs>
+    <linearGradient id="socialBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0077B6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#00B4D8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0096C7;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#socialBg)"/>
+  
+  <!-- Decorative Grid Pattern (subtle) -->
+  <g opacity="0.08">
+    <line x1="0" y1="157.5" x2="1200" y2="157.5" stroke="#FFFFFF" stroke-width="1"/>
+    <line x1="0" y1="315" x2="1200" y2="315" stroke="#FFFFFF" stroke-width="1"/>
+    <line x1="0" y1="472.5" x2="1200" y2="472.5" stroke="#FFFFFF" stroke-width="1"/>
+    <line x1="300" y1="0" x2="300" y2="630" stroke="#FFFFFF" stroke-width="1"/>
+    <line x1="600" y1="0" x2="600" y2="630" stroke="#FFFFFF" stroke-width="1"/>
+    <line x1="900" y1="0" x2="900" y2="630" stroke="#FFFFFF" stroke-width="1"/>
+  </g>
+  
+  <!-- Main Logo - NQ (SAME font) -->
+  <text x="600" y="270" font-family="system-ui, -apple-system, sans-serif" font-size="220" font-weight="900" 
+        text-anchor="middle" fill="#FFFFFF" letter-spacing="-8">NQ</text>
+  
+  <!-- JSON (SAME font as other icons) -->
+  <text x="600" y="360" font-family="system-ui, -apple-system, sans-serif" font-size="58" font-weight="600" 
+        text-anchor="middle" fill="#FFFFFF" opacity="0.85">json</text>
+  
+  <!-- Tagline (SAME font family) -->
+  <text x="600" y="450" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="400"
+        text-anchor="middle" fill="#E0F7FA">Next-gen Query JSON for Go</text>
+  
+  <!-- Feature Badges (SAME font) -->
+  <g transform="translate(350, 520)">
+    <rect x="0" y="0" width="140" height="50" rx="25" fill="#FFFFFF" opacity="0.2"/>
+    <text x="70" y="33" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600"
+          text-anchor="middle" fill="#FFFFFF">Zero Alloc</text>
+  </g>
+  
+  <g transform="translate(530, 520)">
+    <rect x="0" y="0" width="140" height="50" rx="25" fill="#FFFFFF" opacity="0.2"/>
+    <text x="70" y="33" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600"
+          text-anchor="middle" fill="#FFFFFF">Fast Query</text>
+  </g>
+  
+  <g transform="translate(710, 520)">
+    <rect x="0" y="0" width="140" height="50" rx="25" fill="#FFFFFF" opacity="0.2"/>
+    <text x="70" y="33" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600"
+          text-anchor="middle" fill="#FFFFFF">Multipath</text>
+  </g>
+  
+  <!-- Decorative query path line (consistent with other icons) -->
+  <path d="M 250 315 Q 350 305 450 315" 
+        stroke="#90E0EF" stroke-width="3" fill="none" opacity="0.4" 
+        stroke-linecap="round"/>
+</svg>

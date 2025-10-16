@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="256" cy="256" r="240" fill="#00B4D8" stroke="#0077B6" stroke-width="8"/>
+  
+  <!-- NQ Letters - Consistent Bold Sans-Serif -->
+  <text x="256" y="230" font-family="system-ui, -apple-system, sans-serif" font-size="180" font-weight="900" 
+        text-anchor="middle" fill="#FFFFFF" letter-spacing="-5">NQ</text>
+  
+  <!-- JSON text below - Consistent font -->
+  <text x="256" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="48" font-weight="600" 
+        text-anchor="middle" fill="#FFFFFF" opacity="0.8">json</text>
+  
+  <!-- Decorative query path line -->
+  <path d="M 140 390 Q 200 380 256 390 T 372 390" 
+        stroke="#90E0EF" stroke-width="4" fill="none" opacity="0.6" 
+        stroke-linecap="round"/>
+</svg>

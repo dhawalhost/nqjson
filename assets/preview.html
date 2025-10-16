@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nqjson Icon Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, #0077B6 0%, #00B4D8 100%);
+            color: #fff;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            font-size: 48px;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            text-align: center;
+            font-size: 20px;
+            margin-bottom: 50px;
+            opacity: 0.9;
+        }
+        
+        .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 50px;
+        }
+        
+        .icon-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .icon-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .icon-card img {
+            max-width: 200px;
+            height: auto;
+            margin: 0 auto 20px;
+            display: block;
+            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
+        }
+        
+        .icon-card h3 {
+            font-size: 22px;
+            margin-bottom: 10px;
+        }
+        
+        .icon-card p {
+            opacity: 0.9;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .icon-card .filename {
+            font-family: 'Courier New', monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+            display: inline-block;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+        
+        .social-preview {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 50px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .social-preview h3 {
+            text-align: center;
+            font-size: 28px;
+            margin-bottom: 20px;
+        }
+        
+        .social-preview img {
+            width: 100%;
+            max-width: 1200px;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+            border-radius: 10px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .color-palette {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .color-palette h3 {
+            text-align: center;
+            font-size: 28px;
+            margin-bottom: 30px;
+        }
+        
+        .colors {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+        }
+        
+        .color-box {
+            text-align: center;
+        }
+        
+        .color-swatch {
+            width: 120px;
+            height: 120px;
+            border-radius: 15px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            border: 3px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .color-name {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .color-code {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        
+        .download-section {
+            text-align: center;
+            margin-top: 50px;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .download-section h3 {
+            font-size: 28px;
+            margin-bottom: 20px;
+        }
+        
+        .download-section p {
+            font-size: 16px;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 15px 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50px;
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            margin: 0 10px;
+        }
+        
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>nqjson Icons</h1>
+        <p class="subtitle">Next-gen Query JSON for Go</p>
+        
+        <div class="icon-grid">
+            <div class="icon-card">
+                <img src="icon-main.svg" alt="Main Icon">
+                <h3>Main Icon</h3>
+                <p>Clean, modern design with NQ letters, JSON brackets, and performance indicators. Best for general use.</p>
+                <span class="filename">icon-main.svg</span>
+            </div>
+            
+            <div class="icon-card">
+                <img src="icon-gradient.svg" alt="Gradient Icon">
+                <h3>Gradient Icon</h3>
+                <p>Premium look with smooth gradients and modern typography. Perfect for marketing materials.</p>
+                <span class="filename">icon-gradient.svg</span>
+            </div>
+            
+            <div class="icon-card">
+                <img src="icon-dark.svg" alt="Dark Icon">
+                <h3>Dark Theme Icon</h3>
+                <p>Dark background with glowing effect and zero allocation badge. Great for dark mode interfaces.</p>
+                <span class="filename">icon-dark.svg</span>
+            </div>
+            
+            <div class="icon-card">
+                <img src="icon-minimal.svg" alt="Minimal Icon">
+                <h3>Minimal Icon</h3>
+                <p>Simple square design with bold NQ. Ideal for favicons and small thumbnails.</p>
+                <span class="filename">icon-minimal.svg</span>
+            </div>
+        </div>
+        
+        <div class="social-preview">
+            <h3>Social Media Preview</h3>
+            <img src="social-preview.svg" alt="Social Preview">
+            <p style="text-align: center; margin-top: 20px; opacity: 0.9;">
+                1200x630px - Perfect for GitHub social preview, Twitter cards, and Open Graph images
+            </p>
+        </div>
+        
+        <div class="color-palette">
+            <h3>Brand Colors</h3>
+            <div class="colors">
+                <div class="color-box">
+                    <div class="color-swatch" style="background: #00B4D8;"></div>
+                    <div class="color-name">Cyan</div>
+                    <div class="color-code">#00B4D8</div>
+                </div>
+                <div class="color-box">
+                    <div class="color-swatch" style="background: #0077B6;"></div>
+                    <div class="color-name">Deep Blue</div>
+                    <div class="color-code">#0077B6</div>
+                </div>
+                <div class="color-box">
+                    <div class="color-swatch" style="background: #90E0EF;"></div>
+                    <div class="color-name">Light Cyan</div>
+                    <div class="color-code">#90E0EF</div>
+                </div>
+                <div class="color-box">
+                    <div class="color-swatch" style="background: #CAF0F8;"></div>
+                    <div class="color-name">Sky</div>
+                    <div class="color-code">#CAF0F8</div>
+                </div>
+                <div class="color-box">
+                    <div class="color-swatch" style="background: #E0F7FA;"></div>
+                    <div class="color-name">Ice</div>
+                    <div class="color-code">#E0F7FA</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="download-section">
+            <h3>Ready to Use!</h3>
+            <p>All icons are in the <code>assets/</code> folder and ready for immediate use.</p>
+            <a href="ICON_GUIDE.md" class="btn">View Icon Guide</a>
+            <a href="../README.md" class="btn">Back to README</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark Background -->
+  <rect width="512" height="512" fill="#1a1a1a" rx="0"/>
+  
+  <!-- Subtle glow effect -->
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- NQ with glow - SAME font as main -->
+  <text x="256" y="230" font-family="system-ui, -apple-system, sans-serif" font-size="180" font-weight="900" 
+        text-anchor="middle" fill="#00B4D8" letter-spacing="-5" filter="url(#glow)">NQ</text>
+  
+  <!-- JSON text - SAME font as main -->
+  <text x="256" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="48" font-weight="600" 
+        text-anchor="middle" fill="#90E0EF" opacity="0.8">json</text>
+  
+  <!-- Decorative query path line - SAME as main -->
+  <path d="M 140 390 Q 200 380 256 390 T 372 390" 
+        stroke="#90E0EF" stroke-width="4" fill="none" opacity="0.5" 
+        stroke-linecap="round"/>
+  
+  <!-- Additional detail for dark version: corner accent -->
+  <circle cx="70" cy="70" r="8" fill="#00B4D8" opacity="0.4"/>
+  <circle cx="442" cy="70" r="8" fill="#00B4D8" opacity="0.4"/>
+  <circle cx="70" cy="442" r="8" fill="#00B4D8" opacity="0.4"/>
+  <circle cx="442" cy="442" r="8" fill="#00B4D8" opacity="0.4"/>
+</svg>
