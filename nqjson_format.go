@@ -1,5 +1,5 @@
-// Package njson provides Simple, fast JSON formatting implementation
-package njson
+// Package nqjson provides Simple, fast JSON formatting implementation
+package nqjson
 
 import (
 	"bytes"

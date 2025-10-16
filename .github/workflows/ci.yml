@@ -125,7 +125,7 @@ jobs:
     - name: Build examples
       if: matrix.os == 'ubuntu-latest' && matrix.arch == 'amd64'
       run: |
-        go build -o example ./njson_test.go || echo "No main package found"
+        go build -o example ./nqjson_test.go || echo "No main package found"
 
   # Integration and example verification
   integration:
@@ -150,12 +150,12 @@ jobs:
         import (
           \"fmt\"
           \"os\"
-          \"github.com/dhawalhost/njson\"
+          \"github.com/dhawalhost/nqjson\"
         )
         func main() {
           // Test basic functionality
           json := []byte(\`{\"name\":\"John\",\"age\":30}\`)
-          result := njson.Get(json, \"name\")
+          result := nqjson.Get(json, \"name\")
           if result.String() != \"John\" {
             fmt.Println(\"Example verification failed\")
             os.Exit(1)

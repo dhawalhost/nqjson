@@ -108,10 +108,10 @@ formatters:
       sections:
         - standard
         - default
-        - prefix(github.com/dhawalhost/njson)
+        - prefix(github.com/dhawalhost/nqjson)
     goimports:
       local-prefixes:
-        - github.com/dhawalhost/njson
+        - github.com/dhawalhost/nqjson
 
 issues:
   # Maximum issues count per one linter. Set to 0 to disable. Default is 50.

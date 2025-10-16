@@ -1,6 +1,6 @@
-# njson API Documentation
+# nqjson API Documentation
 
-Complete API reference for the njson library.
+Complete API reference for the nqjson library.
 
 ## Table of Contents
 
@@ -35,7 +35,7 @@ type Result struct {
 Returns true if the result exists in the JSON.
 
 ```go
-result := njson.Get(json, "user.name")
+result := nqjson.Get(json, "user.name")
 if result.Exists() {
     fmt.Println("Name found:", result.String())
 }
@@ -45,49 +45,49 @@ if result.Exists() {
 Returns the string representation of the value.
 
 ```go
-name := njson.Get(json, "user.name").String()
+name := nqjson.Get(json, "user.name").String()
 ```
 
 ##### `Int() int64`
 Returns the integer representation of the value.
 
 ```go
-age := njson.Get(json, "user.age").Int()
+age := nqjson.Get(json, "user.age").Int()
 ```
 
 ##### `Uint() uint64`
 Returns the unsigned integer representation of the value.
 
 ```go
-id := njson.Get(json, "user.id").Uint()
+id := nqjson.Get(json, "user.id").Uint()
 ```
 
 ##### `Float() float64`
 Returns the floating-point representation of the value.
 
 ```go
-price := njson.Get(json, "product.price").Float()
+price := nqjson.Get(json, "product.price").Float()
 ```
 
 ##### `Bool() bool`
 Returns the boolean representation of the value.
 
 ```go
-active := njson.Get(json, "user.active").Bool()
+active := nqjson.Get(json, "user.active").Bool()
 ```
 
 ##### `Time() time.Time`
 Parses the value as a time.Time using RFC3339 format.
 
 ```go
-created := njson.Get(json, "user.createdAt").Time()
+created := nqjson.Get(json, "user.createdAt").Time()
 ```
 
 ##### `Array() []Result`
 Returns the value as an array of Results.
 
 ```go
-items := njson.Get(json, "items")
+items := nqjson.Get(json, "items")
 if items.IsArray() {
     for _, item := range items.Array() {
         fmt.Println(item.String())
@@ -99,7 +99,7 @@ if items.IsArray() {
 Returns the value as a map of string keys to Results.
 
 ```go
-user := njson.Get(json, "user")
+user := nqjson.Get(json, "user")
 if user.IsObject() {
     for key, value := range user.Map() {
         fmt.Printf("%s: %s\n", key, value.String())
@@ -171,7 +171,7 @@ Retrieves a single value from JSON using a path expression.
 **Example:**
 ```go
 json := []byte(`{"user": {"name": "Alice", "age": 30}}`)
-name := njson.Get(json, "user.name")
+name := nqjson.Get(json, "user.name")
 fmt.Println(name.String()) // "Alice"
 ```
 
@@ -193,7 +193,7 @@ Retrieves multiple values from JSON in a single operation.
 **Example:**
 ```go
 json := []byte(`{"user": {"name": "Alice", "age": 30, "city": "NYC"}}`)
-results := njson.GetMany(json, "user.name", "user.age", "user.city")
+results := nqjson.GetMany(json, "user.name", "user.age", "user.city")
 for i, result := range results {
     fmt.Printf("Field %d: %s\n", i, result.String())
 }
@@ -221,7 +221,7 @@ Sets a value at the specified path in JSON.
 **Example:**
 ```go
 json := []byte(`{"user": {"name": "Alice"}}`)
-result, err := njson.Set(json, "user.age", 30)
+result, err := nqjson.Set(json, "user.age", 30)
 if err != nil {
     panic(err)
 }
@@ -248,11 +248,11 @@ Sets a value with advanced configuration options.
 
 **Example:**
 ```go
-options := &njson.SetOptions{
+options := &nqjson.SetOptions{
     MergeObjects: true,
     MergeArrays:  false,
 }
-result, err := njson.SetWithOptions(json, "user.preferences", newPrefs, options)
+result, err := nqjson.SetWithOptions(json, "user.preferences", newPrefs, options)
 ```
 
 ### `SetWithCompiledPath(json []byte, path *CompiledSetPath, value interface{}, options *SetOptions) ([]byte, error)`
@@ -271,13 +271,13 @@ Sets a value using a pre-compiled path for better performance.
 
 **Example:**
 ```go
-compiledPath, err := njson.CompileSetPath("users.-1")
+compiledPath, err := nqjson.CompileSetPath("users.-1")
 if err != nil {
     panic(err)
 }
 
 for _, user := range users {
-    json, err = njson.SetWithCompiledPath(json, compiledPath, user, nil)
+    json, err = nqjson.SetWithCompiledPath(json, compiledPath, user, nil)
     if err != nil {
         panic(err)
     }
@@ -301,7 +301,7 @@ Removes a value at the specified path from JSON.
 **Example:**
 ```go
 json := []byte(`{"user": {"name": "Alice", "temp": "remove_me"}}`)
-result, err := njson.Delete(json, "user.temp")
+result, err := nqjson.Delete(json, "user.temp")
 if err != nil {
     panic(err)
 }
@@ -340,14 +340,14 @@ Compiles a path expression for reuse in multiple SET operations.
 
 **Example:**
 ```go
-userPath, err := njson.CompileSetPath("users.-1")
+userPath, err := nqjson.CompileSetPath("users.-1")
 if err != nil {
     panic(err)
 }
 
 // Reuse compiled path for better performance
 for _, user := range users {
-    json, err = njson.SetWithCompiledPath(json, userPath, user, nil)
+    json, err = nqjson.SetWithCompiledPath(json, userPath, user, nil)
     if err != nil {
         panic(err)
     }
@@ -403,8 +403,8 @@ newData := map[string]interface{}{
     "age":   31,
 }
 
-options := &njson.SetOptions{MergeObjects: true}
-result, err := njson.SetWithOptions(existing, "user", newData, options)
+options := &nqjson.SetOptions{MergeObjects: true}
+result, err := nqjson.SetWithOptions(existing, "user", newData, options)
 // Result: {"user":{"name":"Alice","age":31,"email":"alice@example.com"}}
 ```
 
@@ -424,16 +424,16 @@ var (
 ### Error Handling
 
 ```go
-result, err := njson.Set(json, "some.path", value)
+result, err := nqjson.Set(json, "some.path", value)
 if err != nil {
     switch err {
-    case njson.ErrInvalidPath:
+    case nqjson.ErrInvalidPath:
         // Handle path syntax errors
         fmt.Println("Invalid path syntax")
-    case njson.ErrInvalidJSON:
+    case nqjson.ErrInvalidJSON:
         // Handle JSON parsing errors
         fmt.Println("Invalid JSON input")
-    case njson.ErrPathNotFound:
+    case nqjson.ErrPathNotFound:
         // Handle missing path errors
         fmt.Println("Path does not exist")
     default:
@@ -471,7 +471,7 @@ Returns the string representation of the type.
 
 **Example:**
 ```go
-result := njson.Get(json, "user.name")
+result := nqjson.Get(json, "user.name")
 fmt.Printf("Type: %s\n", result.Type.String()) // "String"
 ```
 
