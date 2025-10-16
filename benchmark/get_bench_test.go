@@ -136,7 +136,7 @@ var (
 
 var resultSink string
 
-func benchmarkNJSONGet(b *testing.B, data []byte, path string) {
+func benchmarkNQJSONGet(b *testing.B, data []byte, path string) {
 	b.Helper()
 	b.ReportAllocs()
 
@@ -145,7 +145,7 @@ func benchmarkNJSONGet(b *testing.B, data []byte, path string) {
 		res = nqjson.Get(data, path)
 	}
 	if !res.Exists() {
-		b.Fatalf("njson result missing for path %s", path)
+		b.Fatalf("nqjson result missing for path %s", path)
 	}
 	resultSink = res.String()
 }
@@ -164,56 +164,56 @@ func benchmarkGJSONGet(b *testing.B, data []byte, path string) {
 	resultSink = res.String()
 }
 
-func BenchmarkGet_SimpleSmall_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, simpleSmallJSON, "name")
+func BenchmarkGet_SimpleSmall_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, simpleSmallJSON, "name")
 }
 
 func BenchmarkGet_SimpleSmall_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, simpleSmallJSON, "name")
 }
 
-func BenchmarkGet_SimpleMedium_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, simpleMediumJSON, "user.profile.address.city")
+func BenchmarkGet_SimpleMedium_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, simpleMediumJSON, "user.profile.address.city")
 }
 
 func BenchmarkGet_SimpleMedium_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, simpleMediumJSON, "user.profile.address.city")
 }
 
-func BenchmarkGet_ComplexMedium_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, complexMediumJSON, "metrics.readings.2.value")
+func BenchmarkGet_ComplexMedium_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, complexMediumJSON, "metrics.readings.2.value")
 }
 
 func BenchmarkGet_ComplexMedium_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, complexMediumJSON, "metrics.readings.2.value")
 }
 
-func BenchmarkGet_WildcardLeads_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, wildcardJSON, "teams.*.lead")
+func BenchmarkGet_WildcardLeads_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, wildcardJSON, "teams.*.lead")
 }
 
 func BenchmarkGet_WildcardLeads_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, wildcardJSON, "teams.*.lead")
 }
 
-func BenchmarkGet_LargeDeep_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, largeDeepJSON, "root.level1.level2.level3.level4.level5.value")
+func BenchmarkGet_LargeDeep_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, largeDeepJSON, "root.level1.level2.level3.level4.level5.value")
 }
 
 func BenchmarkGet_LargeDeep_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, largeDeepJSON, "root.level1.level2.level3.level4.level5.value")
 }
 
-func BenchmarkGet_ProjectServices_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, projectedJSON, "systems.#.services.#.name")
+func BenchmarkGet_ProjectServices_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, projectedJSON, "systems.#.services.#.name")
 }
 
 func BenchmarkGet_ProjectServices_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, projectedJSON, "systems.#.services.#.name")
 }
 
-func BenchmarkGet_JSONLinesName_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, jsonLines, "..#.name")
+func BenchmarkGet_JSONLinesName_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, jsonLines, "..#.name")
 }
 
 func BenchmarkGet_JSONLinesName_GJSON(b *testing.B) {
@@ -221,88 +221,88 @@ func BenchmarkGet_JSONLinesName_GJSON(b *testing.B) {
 }
 
 // ==================== MULTIPATH BENCHMARKS ====================
-// Note: Multipath is an njson-specific feature, not supported by gjson
+// Note: Multipath is an nqjson-specific feature, not supported by gjson
 
-func BenchmarkGet_MultiPath_TwoFields_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, multipathJSON, "user.name,user.email")
+func BenchmarkGet_MultiPath_TwoFields_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, multipathJSON, "user.name,user.email")
 }
 
-func BenchmarkGet_MultiPath_FiveFields_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, multipathJSON, "user.id,user.name,user.email,user.age,user.active")
+func BenchmarkGet_MultiPath_FiveFields_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, multipathJSON, "user.id,user.name,user.email,user.age,user.active")
 }
 
-func BenchmarkGet_MultiPath_Mixed_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, multipathJSON, "user.name,metadata.created,user.active")
+func BenchmarkGet_MultiPath_Mixed_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, multipathJSON, "user.name,metadata.created,user.active")
 }
 
 // ==================== EXTENDED MODIFIER BENCHMARKS ====================
 // gjson supports: @reverse, @flatten
-// njson adds: @distinct, @sort, @first, @last, @sum, @avg, @min, @max
+// nqjson adds: @distinct, @sort, @first, @last, @sum, @avg, @min, @max
 
-func BenchmarkGet_Modifier_Reverse_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@reverse")
+func BenchmarkGet_Modifier_Reverse_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@reverse")
 }
 
 func BenchmarkGet_Modifier_Reverse_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, modifierJSON, "nums|@reverse")
 }
 
-func BenchmarkGet_Modifier_Flatten_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nested.data.#.values|@flatten")
+func BenchmarkGet_Modifier_Flatten_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nested.data.#.values|@flatten")
 }
 
 func BenchmarkGet_Modifier_Flatten_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, modifierJSON, "nested.data.#.values|@flatten")
 }
 
-func BenchmarkGet_Modifier_Distinct_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "items.#.id|@distinct")
+func BenchmarkGet_Modifier_Distinct_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "items.#.id|@distinct")
 }
 
-func BenchmarkGet_Modifier_Sort_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@sort")
+func BenchmarkGet_Modifier_Sort_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@sort")
 }
 
-func BenchmarkGet_Modifier_First_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@first")
+func BenchmarkGet_Modifier_First_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@first")
 }
 
-func BenchmarkGet_Modifier_Last_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@last")
+func BenchmarkGet_Modifier_Last_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@last")
 }
 
-func BenchmarkGet_Modifier_Sum_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@sum")
+func BenchmarkGet_Modifier_Sum_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@sum")
 }
 
-func BenchmarkGet_Modifier_Avg_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "scores|@avg")
+func BenchmarkGet_Modifier_Avg_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "scores|@avg")
 }
 
-func BenchmarkGet_Modifier_Min_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@min")
+func BenchmarkGet_Modifier_Min_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@min")
 }
 
-func BenchmarkGet_Modifier_Max_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@max")
+func BenchmarkGet_Modifier_Max_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@max")
 }
 
 // ==================== COMPLEX COMBINED BENCHMARKS ====================
 
-func BenchmarkGet_MultiPath_WithModifier_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, modifierJSON, "nums|@reverse,scores|@avg")
+func BenchmarkGet_MultiPath_WithModifier_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, modifierJSON, "nums|@reverse,scores|@avg")
 }
 
-func BenchmarkGet_JSONLines_WithProjection_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, jsonLines, "..#.name")
+func BenchmarkGet_JSONLines_WithProjection_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, jsonLines, "..#.name")
 }
 
 func BenchmarkGet_JSONLines_WithProjection_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, jsonLines, "..#.name")
 }
 
-func BenchmarkGet_JSONLines_Indexed_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, jsonLines, "..2.age")
+func BenchmarkGet_JSONLines_Indexed_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, jsonLines, "..2.age")
 }
 
 func BenchmarkGet_JSONLines_Indexed_GJSON(b *testing.B) {
@@ -311,32 +311,32 @@ func BenchmarkGet_JSONLines_Indexed_GJSON(b *testing.B) {
 
 // ==================== LARGE DATASET BENCHMARKS ====================
 
-func BenchmarkGet_LargeArray_FirstElement_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, largeArrayJSON, "items.0.id")
+func BenchmarkGet_LargeArray_FirstElement_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, largeArrayJSON, "items.0.id")
 }
 
 func BenchmarkGet_LargeArray_FirstElement_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, largeArrayJSON, "items.0.id")
 }
 
-func BenchmarkGet_LargeArray_MiddleElement_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, largeArrayJSON, "items.500.id")
+func BenchmarkGet_LargeArray_MiddleElement_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, largeArrayJSON, "items.500.id")
 }
 
 func BenchmarkGet_LargeArray_MiddleElement_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, largeArrayJSON, "items.500.id")
 }
 
-func BenchmarkGet_LargeArray_LastElement_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, largeArrayJSON, "items.999.val")
+func BenchmarkGet_LargeArray_LastElement_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, largeArrayJSON, "items.999.val")
 }
 
 func BenchmarkGet_LargeArray_LastElement_GJSON(b *testing.B) {
 	benchmarkGJSONGet(b, largeArrayJSON, "items.999.val")
 }
 
-func BenchmarkGet_LargeArray_Count_NJSON(b *testing.B) {
-	benchmarkNJSONGet(b, largeArrayJSON, "items.#")
+func BenchmarkGet_LargeArray_Count_NQJSON(b *testing.B) {
+	benchmarkNQJSONGet(b, largeArrayJSON, "items.#")
 }
 
 func BenchmarkGet_LargeArray_Count_GJSON(b *testing.B) {

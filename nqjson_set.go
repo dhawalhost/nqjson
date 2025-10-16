@@ -2128,7 +2128,7 @@ func readUnquotedKey(data []byte, pos int) (nameStart, nameEnd, after int, err e
 
 // fastGetObjectValue returns the raw value bytes for a key within an object slice
 func fastGetObjectValue(obj []byte, key string) []byte {
-	// Reuse reader from njson_get
+	// Reuse reader from nqjson_get
 	return getObjectValue(obj, key)
 }
 

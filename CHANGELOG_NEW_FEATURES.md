@@ -2,9 +2,9 @@
 
 ## Summary
 
-Successfully implemented and debugged gjson feature parity extensions for njson:
+Successfully implemented and debugged gjson feature parity extensions for nqjson:
 
-### ✅ Multipath Queries (njson-exclusive)
+### ✅ Multipath Queries (nqjson-exclusive)
 - **Feature**: Query multiple paths in a single call using comma-separated syntax
 - **Syntax**: `Get(json, "user.name,user.email,user.age")`
 - **Returns**: JSON array containing results for each path
@@ -22,15 +22,15 @@ Successfully implemented and debugged gjson feature parity extensions for njson:
 - **Performance**: 3-4µs per query
 - **Tests**: `TestGetMultiPath` includes JSON Lines tests
 - **Benchmarks**:
-  - Projection: 3,064 ns/op (njson) vs 2,311 ns/op (gjson)
-  - Indexed: 4,559 ns/op (njson) vs 457 ns/op (gjson)
+  - Projection: 3,064 ns/op (nqjson) vs 2,311 ns/op (gjson)
+  - Indexed: 4,559 ns/op (nqjson) vs 457 ns/op (gjson)
 
 ### ✅ Extended Modifiers
 **Supported by gjson**:
 - `@reverse` - Reverse array order
 - `@flatten` - Flatten nested arrays
 
-**New njson-exclusive modifiers**:
+**New nqjson-exclusive modifiers**:
 - `@distinct` - Remove duplicate values (5,178 ns/op)
 - `@sort` - Sort array elements (3,617 ns/op)
 - `@first` - Get first element (1,617 ns/op)
@@ -43,16 +43,16 @@ Successfully implemented and debugged gjson feature parity extensions for njson:
 **Example Usage**:
 ```go
 // Get reversed array
-result := njson.Get(json, "nums|@reverse")
+result := nqjson.Get(json, "nums|@reverse")
 
 // Get sum of scores
-total := njson.Get(json, "scores|@sum")
+total := nqjson.Get(json, "scores|@sum")
 
 // Get unique IDs
-ids := njson.Get(json, "items.#.id|@distinct")
+ids := nqjson.Get(json, "items.#.id|@distinct")
 
 // Combined: multipath with modifiers
-results := njson.Get(json, "nums|@reverse,scores|@avg")
+results := nqjson.Get(json, "nums|@reverse,scores|@avg")
 ```
 
 ## Bug Fix - Root Cause Analysis
@@ -61,7 +61,7 @@ results := njson.Get(json, "nums|@reverse,scores|@avg")
 Extended modifiers were returning `undefined` even though the framework was correctly implemented.
 
 ### Root Cause
-The `scanKey` function (line 4099-4112 in `njson_get.go`) only checked for `.` and `[` as path terminators but didn't check for `|` and `@` (modifier separators).
+The `scanKey` function (line 4099-4112 in `nqjson_get.go`) only checked for `.` and `[` as path terminators but didn't check for `|` and `@` (modifier separators).
 
 This caused paths like `"nums|@reverse"` to be incorrectly classified as "simple paths", routing them through `getSimplePath` instead of `getComplexPath`, which meant modifiers were never tokenized or applied.
 
@@ -81,8 +81,8 @@ This ensures paths containing modifiers are correctly identified as complex path
 ## Test Coverage
 
 ### Test Files
-- `njson_get_multipath_test.go` - Comprehensive tests for multipath and extended modifiers
-- `njson_modifier_debug_test.go` - Debug test showing correct routing behavior
+- `nqjson_get_multipath_test.go` - Comprehensive tests for multipath and extended modifiers
+- `nqjson_modifier_debug_test.go` - Debug test showing correct routing behavior
 
 ### Test Results
 ```bash
@@ -101,21 +101,21 @@ PASS
 
 ### New Benchmarks Added
 
-**Multipath (njson-exclusive)**:
-- `BenchmarkGet_MultiPath_TwoFields_NJSON`
-- `BenchmarkGet_MultiPath_FiveFields_NJSON`
-- `BenchmarkGet_MultiPath_Mixed_NJSON`
-- `BenchmarkGet_MultiPath_WithModifier_NJSON`
+**Multipath (nqjson-exclusive)**:
+- `BenchmarkGet_MultiPath_TwoFields_NQJSON`
+- `BenchmarkGet_MultiPath_FiveFields_NQJSON`
+- `BenchmarkGet_MultiPath_Mixed_NQJSON`
+- `BenchmarkGet_MultiPath_WithModifier_NQJSON`
 
 **Extended Modifiers**:
-- `BenchmarkGet_Modifier_Distinct_NJSON`
-- `BenchmarkGet_Modifier_Sort_NJSON`
-- `BenchmarkGet_Modifier_First_NJSON`
-- `BenchmarkGet_Modifier_Last_NJSON`
-- `BenchmarkGet_Modifier_Sum_NJSON`
-- `BenchmarkGet_Modifier_Avg_NJSON`
-- `BenchmarkGet_Modifier_Min_NJSON`
-- `BenchmarkGet_Modifier_Max_NJSON`
+- `BenchmarkGet_Modifier_Distinct_NQJSON`
+- `BenchmarkGet_Modifier_Sort_NQJSON`
+- `BenchmarkGet_Modifier_First_NQJSON`
+- `BenchmarkGet_Modifier_Last_NQJSON`
+- `BenchmarkGet_Modifier_Sum_NQJSON`
+- `BenchmarkGet_Modifier_Avg_NQJSON`
+- `BenchmarkGet_Modifier_Min_NQJSON`
+- `BenchmarkGet_Modifier_Max_NQJSON`
 
 **SET/DELETE Expanded**:
 - Array element updates/deletions
@@ -127,7 +127,7 @@ PASS
 
 ## Performance Characteristics
 
-### Where njson Excels
+### Where nqjson Excels
 1. ✅ **DELETE operations** on simple/nested fields (faster than sjson)
 2. ✅ **Extended modifiers** - 8 exclusive aggregation/transformation operations
 3. ✅ **Multipath queries** - fetch multiple fields in single query (no gjson equivalent)
@@ -142,7 +142,7 @@ PASS
 ## Files Modified
 
 ### Core Implementation
-- `njson_get.go`:
+- `nqjson_get.go`:
   - Fixed `scanKey` function (line ~4101)
   - Added `getWithOptions` internal dispatcher
   - Added `getMultiPathResult` for multipath handling
@@ -151,8 +151,8 @@ PASS
   - Added `splitMultiPath`, `extractJSONLinesValues` helpers
 
 ### Tests
-- `njson_get_multipath_test.go` - NEW file with comprehensive tests
-- `njson_modifier_debug_test.go` - NEW debug test file
+- `nqjson_get_multipath_test.go` - NEW file with comprehensive tests
+- `nqjson_modifier_debug_test.go` - NEW debug test file
 
 ### Benchmarks
 - `benchmark/get_bench_test.go` - Expanded with 20+ new benchmarks
@@ -191,14 +191,14 @@ go test -bench=Modifier -benchmem ./benchmark/
 
 **Before** (multiple Get calls):
 ```go
-name := njson.Get(json, "user.name")
-email := njson.Get(json, "user.email")
-age := njson.Get(json, "user.age")
+name := nqjson.Get(json, "user.name")
+email := nqjson.Get(json, "user.email")
+age := nqjson.Get(json, "user.age")
 ```
 
 **After** (single multipath query):
 ```go
-results := njson.Get(json, "user.name,user.email,user.age")
+results := nqjson.Get(json, "user.name,user.email,user.age")
 // results is JSON array: ["Alice","alice@example.com",28]
 ```
 
@@ -206,27 +206,27 @@ results := njson.Get(json, "user.name,user.email,user.age")
 
 ```go
 // Get sum of all scores
-total := njson.Get(json, "scores|@sum")  // Returns: 464.8
+total := nqjson.Get(json, "scores|@sum")  // Returns: 464.8
 
 // Get average score
-avg := njson.Get(json, "scores|@avg")    // Returns: 92.96
+avg := nqjson.Get(json, "scores|@avg")    // Returns: 92.96
 
 // Get unique IDs (remove duplicates)
-ids := njson.Get(json, "items.#.id|@distinct")  // Returns: [1,2,3]
+ids := nqjson.Get(json, "items.#.id|@distinct")  // Returns: [1,2,3]
 
 // Get sorted numbers
-sorted := njson.Get(json, "nums|@sort")  // Returns: [1,2,3,4,5,8,9]
+sorted := nqjson.Get(json, "nums|@sort")  // Returns: [1,2,3,4,5,8,9]
 
 // First and last elements
-first := njson.Get(json, "items|@first")
-last := njson.Get(json, "items|@last")
+first := nqjson.Get(json, "items|@first")
+last := nqjson.Get(json, "items|@last")
 ```
 
 ### Combined Usage
 
 ```go
 // Multipath with modifiers
-results := njson.Get(json, "nums|@reverse,scores|@avg,items.#.id|@distinct")
+results := nqjson.Get(json, "nums|@reverse,scores|@avg,items.#.id|@distinct")
 // Returns array with all three results
 ```
 
@@ -245,7 +245,7 @@ Potential additions for future versions:
 
 - **gjson** by Josh Baker - Inspiration and compatibility target
 - **sjson** by Josh Baker - SET operation reference implementation
-- **njson** - Extended feature implementation
+- **nqjson** - Extended feature implementation
 
 ---
 

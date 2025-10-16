@@ -40,7 +40,7 @@ var (
     }`)
 )
 
-func benchmarkNJSONSet(b *testing.B, data []byte, path string, value interface{}) {
+func benchmarkNQJSONSet(b *testing.B, data []byte, path string, value interface{}) {
 	b.Helper()
 	b.ReportAllocs()
 
@@ -48,7 +48,7 @@ func benchmarkNJSONSet(b *testing.B, data []byte, path string, value interface{}
 		working := append([]byte(nil), data...)
 		result, err := nqjson.Set(working, path, value)
 		if err != nil {
-			b.Fatalf("njson set failed for path %s: %v", path, err)
+			b.Fatalf("nqjson set failed for path %s: %v", path, err)
 		}
 		resultSink = string(result)
 	}
@@ -68,24 +68,24 @@ func benchmarkSJSONSet(b *testing.B, data []byte, path string, value interface{}
 	}
 }
 
-func BenchmarkSet_SimpleField_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseSimple, "profile.stats.score", 91)
+func BenchmarkSet_SimpleField_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseSimple, "profile.stats.score", 91)
 }
 
 func BenchmarkSet_SimpleField_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseSimple, "profile.stats.score", 91)
 }
 
-func BenchmarkSet_DeepCreate_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseSimple, "profile.preferences.ui.theme", "dark")
+func BenchmarkSet_DeepCreate_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseSimple, "profile.preferences.ui.theme", "dark")
 }
 
 func BenchmarkSet_DeepCreate_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseSimple, "profile.preferences.ui.theme", "dark")
 }
 
-func BenchmarkSet_ArrayAppend_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseSimple, "items.-1", map[string]interface{}{"id": 2, "qty": 5})
+func BenchmarkSet_ArrayAppend_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseSimple, "items.-1", map[string]interface{}{"id": 2, "qty": 5})
 }
 
 func BenchmarkSet_ArrayAppend_SJSON(b *testing.B) {
@@ -94,24 +94,24 @@ func BenchmarkSet_ArrayAppend_SJSON(b *testing.B) {
 
 // ==================== NESTED ARRAY BENCHMARKS ====================
 
-func BenchmarkSet_ArrayElementUpdate_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseLarge, "users.0.profile.score", 95.0)
+func BenchmarkSet_ArrayElementUpdate_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseLarge, "users.0.profile.score", 95.0)
 }
 
 func BenchmarkSet_ArrayElementUpdate_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseLarge, "users.0.profile.score", 95.0)
 }
 
-func BenchmarkSet_ArrayMiddleElement_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseLarge, "users.1.name", "Robert")
+func BenchmarkSet_ArrayMiddleElement_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseLarge, "users.1.name", "Robert")
 }
 
 func BenchmarkSet_ArrayMiddleElement_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseLarge, "users.1.name", "Robert")
 }
 
-func BenchmarkSet_ArrayLastElement_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseLarge, "users.2.profile.email", "charlie@newdomain.com")
+func BenchmarkSet_ArrayLastElement_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseLarge, "users.2.profile.email", "charlie@newdomain.com")
 }
 
 func BenchmarkSet_ArrayLastElement_SJSON(b *testing.B) {
@@ -120,16 +120,16 @@ func BenchmarkSet_ArrayLastElement_SJSON(b *testing.B) {
 
 // ==================== DEEP NESTING BENCHMARKS ====================
 
-func BenchmarkSet_DeepNested_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseDeep, "level1.level2.level3.level4.level5.value", 100)
+func BenchmarkSet_DeepNested_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseDeep, "level1.level2.level3.level4.level5.value", 100)
 }
 
 func BenchmarkSet_DeepNested_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseDeep, "level1.level2.level3.level4.level5.value", 100)
 }
 
-func BenchmarkSet_DeepNestedCreate_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseDeep, "level1.level2.level3.level4.level5.level6.newval", "created")
+func BenchmarkSet_DeepNestedCreate_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseDeep, "level1.level2.level3.level4.level5.level6.newval", "created")
 }
 
 func BenchmarkSet_DeepNestedCreate_SJSON(b *testing.B) {
@@ -138,16 +138,16 @@ func BenchmarkSet_DeepNestedCreate_SJSON(b *testing.B) {
 
 // ==================== METADATA UPDATE BENCHMARKS ====================
 
-func BenchmarkSet_MetadataUpdate_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseLarge, "metadata.updated", "2025-10-17")
+func BenchmarkSet_MetadataUpdate_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseLarge, "metadata.updated", "2025-10-17")
 }
 
 func BenchmarkSet_MetadataUpdate_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseLarge, "metadata.updated", "2025-10-17")
 }
 
-func BenchmarkSet_NestedStats_NJSON(b *testing.B) {
-	benchmarkNJSONSet(b, setBaseLarge, "metadata.stats.total", 4)
+func BenchmarkSet_NestedStats_NQJSON(b *testing.B) {
+	benchmarkNQJSONSet(b, setBaseLarge, "metadata.stats.total", 4)
 }
 
 func BenchmarkSet_NestedStats_SJSON(b *testing.B) {
@@ -156,13 +156,13 @@ func BenchmarkSet_NestedStats_SJSON(b *testing.B) {
 
 // ==================== COMPLEX VALUE BENCHMARKS ====================
 
-func BenchmarkSet_ObjectValue_NJSON(b *testing.B) {
+func BenchmarkSet_ObjectValue_NQJSON(b *testing.B) {
 	value := map[string]interface{}{
 		"theme":    "dark",
 		"language": "en",
 		"timezone": "UTC",
 	}
-	benchmarkNJSONSet(b, setBaseSimple, "profile.preferences", value)
+	benchmarkNQJSONSet(b, setBaseSimple, "profile.preferences", value)
 }
 
 func BenchmarkSet_ObjectValue_SJSON(b *testing.B) {
@@ -174,9 +174,9 @@ func BenchmarkSet_ObjectValue_SJSON(b *testing.B) {
 	benchmarkSJSONSet(b, setBaseSimple, "profile.preferences", value)
 }
 
-func BenchmarkSet_ArrayValue_NJSON(b *testing.B) {
+func BenchmarkSet_ArrayValue_NQJSON(b *testing.B) {
 	value := []interface{}{1, 2, 3, 4, 5}
-	benchmarkNJSONSet(b, setBaseSimple, "profile.badges", value)
+	benchmarkNQJSONSet(b, setBaseSimple, "profile.badges", value)
 }
 
 func BenchmarkSet_ArrayValue_SJSON(b *testing.B) {
@@ -186,7 +186,7 @@ func BenchmarkSet_ArrayValue_SJSON(b *testing.B) {
 
 // ==================== DELETE BENCHMARKS ====================
 
-func benchmarkNJSONDelete(b *testing.B, data []byte, path string) {
+func benchmarkNQJSONDelete(b *testing.B, data []byte, path string) {
 	b.Helper()
 	b.ReportAllocs()
 
@@ -194,7 +194,7 @@ func benchmarkNJSONDelete(b *testing.B, data []byte, path string) {
 		working := append([]byte(nil), data...)
 		result, err := nqjson.Delete(working, path)
 		if err != nil {
-			b.Fatalf("njson delete failed for path %s: %v", path, err)
+			b.Fatalf("nqjson delete failed for path %s: %v", path, err)
 		}
 		resultSink = string(result)
 	}
@@ -214,32 +214,32 @@ func benchmarkSJSONDelete(b *testing.B, data []byte, path string) {
 	}
 }
 
-func BenchmarkDelete_SimpleField_NJSON(b *testing.B) {
-	benchmarkNJSONDelete(b, setBaseSimple, "age")
+func BenchmarkDelete_SimpleField_NQJSON(b *testing.B) {
+	benchmarkNQJSONDelete(b, setBaseSimple, "age")
 }
 
 func BenchmarkDelete_SimpleField_SJSON(b *testing.B) {
 	benchmarkSJSONDelete(b, setBaseSimple, "age")
 }
 
-func BenchmarkDelete_NestedField_NJSON(b *testing.B) {
-	benchmarkNJSONDelete(b, setBaseSimple, "profile.stats.score")
+func BenchmarkDelete_NestedField_NQJSON(b *testing.B) {
+	benchmarkNQJSONDelete(b, setBaseSimple, "profile.stats.score")
 }
 
 func BenchmarkDelete_NestedField_SJSON(b *testing.B) {
 	benchmarkSJSONDelete(b, setBaseSimple, "profile.stats.score")
 }
 
-func BenchmarkDelete_ArrayElement_NJSON(b *testing.B) {
-	benchmarkNJSONDelete(b, setBaseLarge, "users.1")
+func BenchmarkDelete_ArrayElement_NQJSON(b *testing.B) {
+	benchmarkNQJSONDelete(b, setBaseLarge, "users.1")
 }
 
 func BenchmarkDelete_ArrayElement_SJSON(b *testing.B) {
 	benchmarkSJSONDelete(b, setBaseLarge, "users.1")
 }
 
-func BenchmarkDelete_DeepNested_NJSON(b *testing.B) {
-	benchmarkNJSONDelete(b, setBaseDeep, "level1.level2.level3.level4.level5.value")
+func BenchmarkDelete_DeepNested_NQJSON(b *testing.B) {
+	benchmarkNQJSONDelete(b, setBaseDeep, "level1.level2.level3.level4.level5.value")
 }
 
 func BenchmarkDelete_DeepNested_SJSON(b *testing.B) {
@@ -248,7 +248,7 @@ func BenchmarkDelete_DeepNested_SJSON(b *testing.B) {
 
 // ==================== MULTIPLE OPERATIONS BENCHMARKS ====================
 
-func BenchmarkSet_MultipleUpdates_NJSON(b *testing.B) {
+func BenchmarkSet_MultipleUpdates_NQJSON(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {

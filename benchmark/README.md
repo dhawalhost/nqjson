@@ -1,13 +1,13 @@
 # Benchmarks
 
-This directory contains performance benchmarks comparing njson against gjson (GET operations) and sjson (SET/DELETE operations).
+This directory contains performance benchmarks comparing nqjson against gjson (GET operations) and sjson (SET/DELETE operations).
 
 ## Separate Go Module
 
-This directory has its own `go.mod` file, making it a **separate Go module** from the main njson library. This ensures:
-- ✅ Main njson library has **ZERO dependencies**
+This directory has its own `go.mod` file, making it a **separate Go module** from the main nqjson library. This ensures:
+- ✅ Main nqjson library has **ZERO dependencies**
 - ✅ Benchmark dependencies (gjson/sjson) are completely isolated
-- ✅ Users installing njson don't download benchmark deps
+- ✅ Users installing nqjson don't download benchmark deps
 
 ## Running Benchmarks
 
@@ -40,7 +40,7 @@ go test -bench=BenchmarkSet -benchmem
 go test -bench=BenchmarkDelete -benchmem
 ```
 
-**Multipath Queries (njson-exclusive):**
+**Multipath Queries (nqjson-exclusive):**
 ```bash
 go test -bench=MultiPath -benchmem
 ```
@@ -56,22 +56,22 @@ This benchmark module requires:
 - `github.com/tidwall/gjson` - for GET operation comparisons
 - `github.com/tidwall/sjson` - for SET/DELETE operation comparisons
 
-These are **automatically managed** by the `go.mod` file in this directory and are **NOT** required for normal njson usage.
+These are **automatically managed** by the `go.mod` file in this directory and are **NOT** required for normal nqjson usage.
 
 ## Module Structure
 
 ```
-njson/
+nqjson/
 ├── go.mod                    # Main module - ZERO dependencies
-├── njson_get.go
-├── njson_get_test.go        # Tests - no external deps
+├── nqjson_get.go
+├── nqjson_get_test.go        # Tests - no external deps
 └── benchmark/
     ├── go.mod               # Benchmark module - has gjson/sjson
     ├── get_bench_test.go    # Benchmarks comparing with gjson
     └── set_bench_test.go    # Benchmarks comparing with sjson
 ```
 
-The `replace` directive in `benchmark/go.mod` points to the parent directory, so benchmarks always use the local development version of njson.
+The `replace` directive in `benchmark/go.mod` points to the parent directory, so benchmarks always use the local development version of nqjson.
 
 ## Benchmark Results
 

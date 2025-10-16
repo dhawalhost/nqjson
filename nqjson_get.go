@@ -877,8 +877,8 @@ func getUltraSimplePath(data []byte, path string) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// findKeyInJSON searches for a key in JSON data and returns its index
-func findKeyInJSON(data []byte, path string, keyLen, searchLen int) int {
+// findKeyInqJSON searches for a key in JSON data and returns its index
+func findKeyInqJSON(data []byte, path string, keyLen, searchLen int) int {
 	for i := 0; i <= len(data)-searchLen; i++ {
 		if data[i] == '"' {
 			// Check if the key matches

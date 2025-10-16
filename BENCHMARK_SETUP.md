@@ -2,7 +2,7 @@
 
 ## Overview
 
-njson benchmarks are in a **separate Go module** to completely isolate dependencies. The main njson library has **ZERO external dependencies**, while benchmarks have their own `go.mod` with gjson/sjson for performance comparisons.
+nqjson benchmarks are in a **separate Go module** to completely isolate dependencies. The main nqjson library has **ZERO external dependencies**, while benchmarks have their own `go.mod` with gjson/sjson for performance comparisons.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ njson benchmarks are in a **separate Go module** to completely isolate dependenc
 
 **Main Module** (`go.mod`):
 ```
-module github.com/dhawalhost/njson
+module github.com/dhawalhost/nqjson
 
 go 1.23.10
 ```
@@ -20,25 +20,25 @@ go 1.23.10
 
 **Benchmark Module** (`benchmark/go.mod`):
 ```
-module github.com/dhawalhost/njson/benchmark
+module github.com/dhawalhost/nqjson/benchmark
 
 require (
-    github.com/dhawalhost/njson v0.0.0
+    github.com/dhawalhost/nqjson v0.0.0
     github.com/tidwall/gjson v1.18.0
     github.com/tidwall/sjson v1.2.5
 )
 
-replace github.com/dhawalhost/njson => ../
+replace github.com/dhawalhost/nqjson => ../
 ```
 - ✅ Separate dependency tree
 - ✅ gjson/sjson isolated here
-- ✅ Uses local njson via replace directive
+- ✅ Uses local nqjson via replace directive
 
 ## Why Separate Modules?
 
 ### ✅ Benefits
 
-1. **Zero Dependencies for Users**: `go get github.com/dhawalhost/njson` installs ONLY njson
+1. **Zero Dependencies for Users**: `go get github.com/dhawalhost/nqjson` installs ONLY nqjson
 2. **Complete Isolation**: Benchmark dependencies never appear in user projects
 3. **Cleaner Architecture**: Clear separation between library and testing
 4. **Professional Structure**: Industry best practice for Go libraries
@@ -46,11 +46,11 @@ replace github.com/dhawalhost/njson => ../
 
 ### 📦 What Gets Installed
 
-**Installing njson for normal use**:
+**Installing nqjson for normal use**:
 ```bash
-go get github.com/dhawalhost/njson
+go get github.com/dhawalhost/nqjson
 ```
-- ✅ Only njson library code (single module)
+- ✅ Only nqjson library code (single module)
 - ✅ **ZERO external dependencies**
 - ✅ All functionality works
 - ✅ Clean `go.mod` in your project
@@ -77,7 +77,7 @@ make bench
 make bench-get          # GET operations only
 make bench-set          # SET operations only
 make bench-delete       # DELETE operations only
-make bench-multipath    # Multipath queries (njson-exclusive)
+make bench-multipath    # Multipath queries (nqjson-exclusive)
 make bench-modifiers    # Extended modifiers
 
 # Save results to file
@@ -119,9 +119,9 @@ This means:
 
 ### Test Files (No Build Tags)
 
-Regular test files like `njson_get_test.go` do **NOT** use build tags:
+Regular test files like `nqjson_get_test.go` do **NOT** use build tags:
 - ✅ Always run with `go test`
-- ✅ Test actual njson functionality
+- ✅ Test actual nqjson functionality
 - ✅ No external dependencies
 
 ## Dependency Management
@@ -137,7 +137,7 @@ go.mod dependencies:
 
 ### How It Works
 
-1. **Normal users**: When you `go get github.com/dhawalhost/njson`, the benchmark files are excluded by build tags, so gjson/sjson are not pulled in as dependencies for your project.
+1. **Normal users**: When you `go get github.com/dhawalhost/nqjson`, the benchmark files are excluded by build tags, so gjson/sjson are not pulled in as dependencies for your project.
 
 2. **Developers/CI**: When running `go test -tags=benchmark`, the benchmark files are included and gjson/sjson become available.
 
@@ -186,8 +186,8 @@ jobs:
 
 ```bash
 # Clone repository
-git clone https://github.com/dhawalhost/njson.git
-cd njson
+git clone https://github.com/dhawalhost/nqjson.git
+cd nqjson
 
 # Install development tools
 make install-tools
@@ -211,7 +211,7 @@ make bench
 
 ## Troubleshooting
 
-### Error: "package github.com/dhawalhost/njson/benchmark: build constraints exclude all Go files"
+### Error: "package github.com/dhawalhost/nqjson/benchmark: build constraints exclude all Go files"
 
 **Solution**: Add `-tags=benchmark` flag:
 ```bash
@@ -238,9 +238,9 @@ go test -tags=benchmark -bench=. -benchtime=5s ./benchmark/
 ## Best Practices
 
 ### For Library Users
-- ✅ Just use `go get github.com/dhawalhost/njson`
+- ✅ Just use `go get github.com/dhawalhost/nqjson`
 - ✅ No need to install gjson/sjson
-- ✅ All njson features work out of the box
+- ✅ All nqjson features work out of the box
 
 ### For Contributors
 - ✅ Run `make bench-install-deps` once

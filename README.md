@@ -1,4 +1,4 @@
-# NJSON
+# NQJSON
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/nqjson)](https://goreportcard.com/report/github.com/dhawalhost/nqjson) [![GoDoc](https://godoc.org/github.com/dhawalhost/nqjson?status.svg)](https://godoc.org/github.com/dhawalhost/nqjson) [![Static Badge](https://img.shields.io/badge/nqjson-playground-blue)](https://dhawalhost.github.io/nqjson-playground/)
 

@@ -1,4 +1,4 @@
-# Makefile for njson library
+# Makefile for nqjson library
 
 .PHONY: all test test-unit test-bench test-race lint security clean help install-tools fmt vet bench bench-get bench-set bench-delete bench-multipath bench-modifiers bench-save
 
@@ -22,7 +22,7 @@ help:
 	@echo "  bench-get          - Run GET benchmarks only"
 	@echo "  bench-set          - Run SET benchmarks only"
 	@echo "  bench-delete       - Run DELETE benchmarks only"
-	@echo "  bench-multipath    - Run multipath benchmarks (njson-exclusive)"
+	@echo "  bench-multipath    - Run multipath benchmarks (nqjson-exclusive)"
 	@echo "  bench-modifiers    - Run extended modifier benchmarks"
 	@echo "  bench-save         - Run benchmarks and save results"
 	@echo "  ci                 - Run all CI checks locally"
@@ -94,7 +94,7 @@ bench-delete:
 	cd benchmark && go test -run=^$$ -bench=BenchmarkDelete -benchmem
 
 bench-multipath:
-	@echo "Running multipath benchmarks (njson-exclusive feature)..."
+	@echo "Running multipath benchmarks (nqjson-exclusive feature)..."
 	cd benchmark && go test -run=^$$ -bench=MultiPath -benchmem
 
 bench-modifiers:

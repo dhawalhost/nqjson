@@ -318,7 +318,7 @@ For applications prioritizing features, memory efficiency, and excellent perform
 
 #### Simple - Simple key deletion (optimized path)
 ```
-BenchmarkDelete_Simple_NJSON-11    11,589,476    102.0 ns/op    24 B/op    1 allocs/op
+BenchmarkDelete_Simple_NQJSON-11    11,589,476    102.0 ns/op    24 B/op    1 allocs/op
 BenchmarkDelete_Simple_SJSON-11    10,915,846    110.2 ns/op    96 B/op    2 allocs/op
 ```
 - **nqjson advantage**: 7% faster with 75% less memory usage
@@ -327,7 +327,7 @@ BenchmarkDelete_Simple_SJSON-11    10,915,846    110.2 ns/op    96 B/op    2 all
 
 #### Nested - Nested key deletion
 ```
-BenchmarkDelete_Nested_NJSON-11      177,187     6,705 ns/op   4,215 B/op   106 allocs/op
+BenchmarkDelete_Nested_NQJSON-11      177,187     6,705 ns/op   4,215 B/op   106 allocs/op
 BenchmarkDelete_Nested_SJSON-11    2,638,689       451.2 ns/op 1,136 B/op     6 allocs/op
 ```
 - **sjson advantage**: 1,387% faster (falls back to generic path)
@@ -336,7 +336,7 @@ BenchmarkDelete_Nested_SJSON-11    2,638,689       451.2 ns/op 1,136 B/op     6 
 
 #### Array - Array element deletion
 ```
-BenchmarkDelete_Array_NJSON-11       183,154     6,630 ns/op   4,111 B/op   104 allocs/op
+BenchmarkDelete_Array_NQJSON-11       183,154     6,630 ns/op   4,111 B/op   104 allocs/op
 BenchmarkDelete_Array_SJSON-11     2,816,504       428.3 ns/op   704 B/op     4 allocs/op
 ```
 - **sjson advantage**: 1,449% faster (falls back to generic path)

@@ -1,6 +1,6 @@
-# CI/CD Setup for njson
+# CI/CD Setup for nqjson
 
-This document describes the comprehensive CI/CD pipeline setup for the njson library.
+This document describes the comprehensive CI/CD pipeline setup for the nqjson library.
 
 ## 🔧 CI/CD Pipeline Overview
 
