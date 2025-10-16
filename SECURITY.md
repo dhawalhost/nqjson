@@ -12,11 +12,11 @@ Use this section to tell people about which versions of your project are current
 
 ## Reporting a Vulnerability
 
-The njson team takes security bugs seriously. We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
+The nqjson team takes security bugs seriously. We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
 
 ### How to Report a Security Vulnerability
 
-If you believe you have found a security vulnerability in njson, please report it to us through coordinated disclosure.
+If you believe you have found a security vulnerability in nqjson, please report it to us through coordinated disclosure.
 
 **Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests.**
 
@@ -41,9 +41,9 @@ This information will help us triage your report more quickly.
 - **Updates**: We will provide updates on our progress every 7 days until the issue is resolved.
 - **Resolution**: We aim to resolve critical security issues within 30 days of the initial report.
 
-### Security Measures in njson
+### Security Measures in nqjson
 
-The njson library implements several security measures:
+The nqjson library implements several security measures:
 
 1. **Memory Safety**: 
    - Proper bounds checking for all array/slice operations
@@ -68,12 +68,12 @@ The njson library implements several security measures:
 
 ### Security Best Practices for Users
 
-When using njson in your applications:
+When using nqjson in your applications:
 
 1. **Input Validation**: Always validate JSON input from untrusted sources
-2. **Error Handling**: Check and handle all errors returned by njson functions
+2. **Error Handling**: Check and handle all errors returned by nqjson functions
 3. **Resource Limits**: Implement appropriate limits for JSON size and nesting depth
-4. **Regular Updates**: Keep njson updated to the latest version
+4. **Regular Updates**: Keep nqjson updated to the latest version
 
 ### Vulnerability Disclosure Timeline
 
@@ -86,7 +86,7 @@ When using njson in your applications:
 
 ### Security Hall of Fame
 
-We recognize security researchers who help make njson safer:
+We recognize security researchers who help make nqjson safer:
 
 (List will be updated as vulnerabilities are reported and fixed)
 
@@ -98,4 +98,4 @@ For any security-related questions or concerns, please contact:
 
 ---
 
-Thank you for helping keep njson and our users safe!
+Thank you for helping keep nqjson and our users safe!

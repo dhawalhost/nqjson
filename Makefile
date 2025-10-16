@@ -1,6 +1,6 @@
-# Makefile for njson library
+# Makefile for nqjson library
 
-.PHONY: all test test-unit test-bench test-race lint security clean help install-tools fmt vet
+.PHONY: all test test-unit test-bench test-race lint security clean help install-tools fmt vet bench bench-get bench-set bench-delete bench-multipath bench-modifiers bench-save
 
 # Default target
 all: test lint security
@@ -8,17 +8,24 @@ all: test lint security
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  test          - Run all tests"
-	@echo "  test-unit     - Run unit tests only"
-	@echo "  test-race     - Run tests with race detector"
-	@echo "  test-coverage - Run tests with coverage report"
-	@echo "  lint          - Run linting checks"
-	@echo "  security      - Run security checks"
-	@echo "  fmt           - Format code"
-	@echo "  vet           - Run go vet"
-	@echo "  clean         - Clean build artifacts"
-	@echo "  install-tools - Install development tools"
-	@echo "  ci            - Run all CI checks locally"
+	@echo "  test               - Run all tests"
+	@echo "  test-unit          - Run unit tests only"
+	@echo "  test-race          - Run tests with race detector"
+	@echo "  test-coverage      - Run tests with coverage report"
+	@echo "  lint               - Run linting checks"
+	@echo "  security           - Run security checks"
+	@echo "  fmt                - Format code"
+	@echo "  vet                - Run go vet"
+	@echo "  clean              - Clean build artifacts"
+	@echo "  install-tools      - Install development tools"
+	@echo "  bench              - Run full benchmark suite"
+	@echo "  bench-get          - Run GET benchmarks only"
+	@echo "  bench-set          - Run SET benchmarks only"
+	@echo "  bench-delete       - Run DELETE benchmarks only"
+	@echo "  bench-multipath    - Run multipath benchmarks (nqjson-exclusive)"
+	@echo "  bench-modifiers    - Run extended modifier benchmarks"
+	@echo "  bench-save         - Run benchmarks and save results"
+	@echo "  ci                 - Run all CI checks locally"
 
 # Install development tools
 install-tools:
@@ -63,6 +70,41 @@ lint: fmt vet
 	staticcheck ./...
 	@echo "Running ineffassign..."
 	ineffassign ./...
+
+# Benchmark targets (separate module in benchmark/)
+bench:
+	@echo "Running full benchmark suite..."
+	@echo "Note: Benchmarks have their own go.mod with gjson/sjson dependencies"
+	@mkdir -p bench
+	cd benchmark && go test -run=^$$ -bench=. -benchmem -benchtime=2s | tee ../bench/latest.txt
+	@echo ""
+	@echo "✅ Benchmark results saved to bench/latest.txt"
+	@echo "📊 See BENCHMARKS.md for detailed analysis"
+
+bench-get:
+	@echo "Running GET benchmarks..."
+	cd benchmark && go test -run=^$$ -bench=BenchmarkGet -benchmem
+
+bench-set:
+	@echo "Running SET benchmarks..."
+	cd benchmark && go test -run=^$$ -bench=BenchmarkSet -benchmem
+
+bench-delete:
+	@echo "Running DELETE benchmarks..."
+	cd benchmark && go test -run=^$$ -bench=BenchmarkDelete -benchmem
+
+bench-multipath:
+	@echo "Running multipath benchmarks (nqjson-exclusive feature)..."
+	cd benchmark && go test -run=^$$ -bench=MultiPath -benchmem
+
+bench-modifiers:
+	@echo "Running extended modifier benchmarks..."
+	cd benchmark && go test -run=^$$ -bench=Modifier -benchmem
+
+bench-save:
+	@echo "Running benchmarks and saving to benchmark_results.txt..."
+	cd benchmark && go test -run=^$$ -bench=. -benchmem | tee ../benchmark_results.txt
+	@echo "Results saved to benchmark_results.txt"
 
 # Security targets
 security:

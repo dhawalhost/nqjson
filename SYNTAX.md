@@ -1,6 +1,6 @@
-# njson Path Expression Syntax
+# nqjson Path Expression Syntax
 
-This document provides a comprehensive guide to all path expression syntaxes supported by njson for both GET and SET operations.
+This document provides a comprehensive guide to all path expression syntaxes supported by nqjson for both GET and SET operations.
 
 ## Table of Contents
 
@@ -56,7 +56,7 @@ path := "."              // Also returns the entire JSON document
 
 ### Array Indexing
 
-njson supports multiple ways to access array elements:
+nqjson supports multiple ways to access array elements:
 
 #### Dot Notation with Index
 
@@ -131,7 +131,7 @@ path := "api.endpoints[3].params.0.type"   // Parameter type from fourth endpoin
 
 ## Filter Expressions
 
-njson supports JSONPath-style filter expressions for conditional data retrieval:
+nqjson supports JSONPath-style filter expressions for conditional data retrieval:
 
 ### Basic Filter Syntax
 
@@ -266,21 +266,21 @@ All GET syntax patterns are supported for SET operations, with additional consid
 
 ```go
 // Set simple values
-njson.Set(json, "user.name", "Alice")
-njson.Set(json, "config.port", 8080)
-njson.Set(json, "settings.enabled", true)
+nqjson.Set(json, "user.name", "Alice")
+nqjson.Set(json, "config.port", 8080)
+nqjson.Set(json, "settings.enabled", true)
 ```
 
 ### Array SET Operations
 
 ```go
 // Set array elements
-njson.Set(json, "items.0", "first item")
-njson.Set(json, "items[1]", "second item")
-njson.Set(json, "users.2.name", "Charlie")
+nqjson.Set(json, "items.0", "first item")
+nqjson.Set(json, "items[1]", "second item")
+nqjson.Set(json, "users.2.name", "Charlie")
 
 // Append to array (using -1 index)
-njson.Set(json, "items.-1", "new item")
+nqjson.Set(json, "items.-1", "new item")
 ```
 
 ### Path Creation
@@ -289,7 +289,7 @@ SET operations can create missing paths automatically:
 
 ```go
 // Creates nested structure if it doesn't exist
-njson.Set(json, "user.profile.settings.theme", "dark")
+nqjson.Set(json, "user.profile.settings.theme", "dark")
 // Result: {"user": {"profile": {"settings": {"theme": "dark"}}}}
 ```
 
@@ -298,7 +298,7 @@ njson.Set(json, "user.profile.settings.theme", "dark")
 ```go
 // Note: Complex filter expressions in SET operations may have limitations
 // Basic replacement works, but creation through filters is not supported
-njson.Set(json, "users[?(@.id==123)].status", "active")
+nqjson.Set(json, "users[?(@.id==123)].status", "active")
 ```
 
 ## Path Compilation
@@ -307,14 +307,14 @@ For repeated operations, paths can be pre-compiled for better performance:
 
 ```go
 // Compile once
-compiledPath, err := njson.CompileSetPath("users.0.profile.settings")
+compiledPath, err := nqjson.CompileSetPath("users.0.profile.settings")
 if err != nil {
     return err
 }
 
 // Use multiple times
-result1, err := njson.SetWithCompiledPath(json1, compiledPath, value1, nil)
-result2, err := njson.SetWithCompiledPath(json2, compiledPath, value2, nil)
+result1, err := nqjson.SetWithCompiledPath(json1, compiledPath, value1, nil)
+result2, err := nqjson.SetWithCompiledPath(json2, compiledPath, value2, nil)
 ```
 
 ### Valid Path Characters
@@ -426,4 +426,4 @@ Invalid characters will result in compilation errors.
 4. **Consider using batch operations** for multiple SET operations on the same document
 5. **Test complex filter expressions** thoroughly to ensure they work as expected
 
-This comprehensive syntax guide covers all supported path expressions in njson. For additional examples and use cases, refer to the [EXAMPLES.md](EXAMPLES.md) and [API.md](API.md) documentation.
+This comprehensive syntax guide covers all supported path expressions in nqjson. For additional examples and use cases, refer to the [EXAMPLES.md](EXAMPLES.md) and [API.md](API.md) documentation.

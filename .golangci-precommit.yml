@@ -21,11 +21,38 @@ linters:
   disable-all: true
   enable:
     # Critical linters that should block commits
-    - errcheck
-    - gosec
-    - govet
-    - staticcheck
-    - ineffassign
+    - errcheck # Check for unchecked errors
+    - gosec # Security-related issues
+    - govet # Go's official vet tool
+    - staticcheck # Modern, comprehensive linter
+    - ineffassign # Detect when assignments to existing variables are not used
+    - gofmt # Check for gofmt issues
+    - misspell # Check for common misspellings
+    - revive # Fast, configurable linter
+    - gocyclo   # Check for cyclomatic complexity
+    - typecheck # Like govet, but more thorough
+    - unused # Check for unused variables, functions, etc.
+    - varcheck # Check for unused global variables and constants
+    - structcheck # Check for unused struct fields
+    - deadcode # Check for unused code
+    - depguard # Enforce import restrictions
+    - lll # Check for long lines
+    - goimports # Check for missing or unorganized imports
+    # Additional linters that are useful but not critical
+    - bodyclose # Check that HTTP response bodies are closed
+    - dupl # Check for duplicate code
+    - nakedreturns # Check for naked returns in functions with > 2 lines
+    - goconst # Suggest using constants for repeated strings
+    - prealloc # Suggest preallocation of slices
+    - scopelint # Check for variables that could be moved to a smaller scope
+    - unparam # Check for unused function parameters
+    - whitespace # Check for unnecessary whitespace
+    - wslinters # Check for Windows-style line endings
+    - wrapcheck # Check for fmt.Errorf wrapping
+    - interfacer  # Suggest narrower interface types
+    - funlen  # Check for functions that are too long
+    - exhaustivestruct # Check for missing struct fields in composite literals
+
 
 issues:
   exclude-dirs:
