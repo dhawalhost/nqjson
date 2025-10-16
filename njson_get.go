@@ -5,6 +5,7 @@ package njson
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -96,12 +97,34 @@ var (
 // CORE GET IMPLEMENTATION
 //------------------------------------------------------------------------------
 
+type getOptions struct {
+	allowMultipath bool
+	allowJSONLines bool
+}
+
 // Get retrieves a value from JSON using a path expression.
 // This is highly optimized with multiple fast paths for common use cases.
 func Get(data []byte, path string) Result {
+	return getWithOptions(data, path, getOptions{allowMultipath: true, allowJSONLines: true})
+}
+
+func getWithOptions(data []byte, path string, opts getOptions) Result {
 	// Empty path should return non-existent result according to tests
 	if path == "" {
 		return Result{Type: TypeUndefined}
+	}
+
+	if opts.allowMultipath {
+		if multi, handled := getMultiPathResult(data, path, opts); handled {
+			return multi
+		}
+	}
+
+	// JSON Lines support: treat leading ".." prefix as newline-delimited documents when applicable.
+	if opts.allowJSONLines && strings.HasPrefix(path, "..") {
+		if jsonLinesResult, handled := getJSONLinesResult(data, path, opts); handled {
+			return jsonLinesResult
+		}
 	}
 
 	// Root path returns the entire document
@@ -129,6 +152,221 @@ func Get(data []byte, path string) Result {
 
 	// Use more advanced path processing for complex paths
 	return getComplexPath(data, path)
+}
+
+// getJSONLinesResult normalizes JSON Lines content into an array and then executes the provided path.
+func getMultiPathResult(data []byte, path string, opts getOptions) (Result, bool) {
+	segments := splitMultiPath(path)
+	if len(segments) < 2 {
+		return Result{}, false
+	}
+
+	results := make([]Result, 0, len(segments))
+	for _, segment := range segments {
+		if segment == "" {
+			continue
+		}
+		subResult := getWithOptions(data, segment, getOptions{allowMultipath: false, allowJSONLines: opts.allowJSONLines})
+		if !subResult.Exists() {
+			subResult = buildNullResult()
+		}
+		results = append(results, subResult)
+	}
+
+	if len(results) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}, true
+	}
+
+	combined := buildWildcardResult(results)
+	if combined.Type == TypeUndefined {
+		combined = Result{Type: TypeArray, Raw: []byte("[]")}
+	}
+	combined.Modified = true
+	return combined, true
+}
+
+func splitMultiPath(path string) []string {
+	var segments []string
+	var current strings.Builder
+	bracketDepth, braceDepth, parenDepth := 0, 0, 0
+	inString := false
+	var stringQuote byte
+
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if inString {
+			current.WriteByte(c)
+			if c == '\\' {
+				if i+1 < len(path) {
+					i++
+					current.WriteByte(path[i])
+				}
+				continue
+			}
+			if c == stringQuote {
+				inString = false
+			}
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			inString = true
+			stringQuote = c
+			current.WriteByte(c)
+		case '[':
+			bracketDepth++
+			current.WriteByte(c)
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+			current.WriteByte(c)
+		case '{':
+			braceDepth++
+			current.WriteByte(c)
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			current.WriteByte(c)
+		case '(':
+			parenDepth++
+			current.WriteByte(c)
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+			current.WriteByte(c)
+		case ',':
+			if bracketDepth == 0 && braceDepth == 0 && parenDepth == 0 {
+				segment := strings.TrimSpace(current.String())
+				if segment != "" {
+					segments = append(segments, segment)
+				}
+				current.Reset()
+				continue
+			}
+			current.WriteByte(c)
+		default:
+			current.WriteByte(c)
+		}
+	}
+
+	if current.Len() > 0 {
+		segment := strings.TrimSpace(current.String())
+		if segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+
+	return segments
+}
+
+func buildNullResult() Result {
+	return Result{Type: TypeNull, Raw: []byte("null"), Modified: true}
+}
+
+func getJSONLinesResult(data []byte, path string, opts getOptions) (Result, bool) {
+	values, ok := extractJSONLinesValues(data)
+	if !ok {
+		return Result{}, false
+	}
+
+	if len(values) == 0 {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	arrayBytes := buildJSONArrayFromLines(values)
+
+	// Normalize the path by removing the ".." prefix and optional leading dot.
+	trimmedPath := path[2:]
+	if len(trimmedPath) > 0 && trimmedPath[0] == '.' {
+		trimmedPath = trimmedPath[1:]
+	}
+
+	if trimmedPath == "" {
+		return Parse(arrayBytes), true
+	}
+
+	return getWithOptions(arrayBytes, trimmedPath, getOptions{allowMultipath: true, allowJSONLines: false}), true
+}
+
+// extractJSONLinesValues returns valid JSON documents when the input represents JSON Lines.
+func extractJSONLinesValues(data []byte) ([][]byte, bool) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil, false
+	}
+
+	if json.Valid(trimmed) {
+		return nil, false
+	}
+
+	// Prefer actual newline-separated payloads after normalizing CRLF.
+	normalized := bytes.ReplaceAll(trimmed, []byte{'\r'}, nil)
+	if values, ok := splitAndValidateJSONLines(normalized, []byte{'\n'}); ok {
+		return values, true
+	}
+
+	// Fallback: handle literal "\n" sequences (common when raw string literals are used).
+	if values, ok := splitAndValidateJSONLines(trimmed, []byte(`\n`)); ok {
+		return values, true
+	}
+
+	// Handle literal "\r\n" sequences if present.
+	if values, ok := splitAndValidateJSONLines(trimmed, []byte(`\r\n`)); ok {
+		return values, true
+	}
+
+	return nil, false
+}
+
+func splitAndValidateJSONLines(data []byte, sep []byte) ([][]byte, bool) {
+	if len(sep) == 0 {
+		return nil, false
+	}
+
+	segments := bytes.Split(data, sep)
+	values := make([][]byte, 0, len(segments))
+	for _, segment := range segments {
+		entry := bytes.TrimSpace(segment)
+		if len(entry) == 0 {
+			continue
+		}
+		if !json.Valid(entry) {
+			return nil, false
+		}
+		values = append(values, entry)
+	}
+
+	if len(values) == 0 {
+		return nil, false
+	}
+
+	return values, true
+}
+
+// buildJSONArrayFromLines constructs a JSON array from individual JSON documents.
+func buildJSONArrayFromLines(values [][]byte) []byte {
+	totalSize := 2 // opening and closing brackets
+	for i, v := range values {
+		if i > 0 {
+			totalSize++ // comma
+		}
+		totalSize += len(v)
+	}
+
+	result := make([]byte, 0, totalSize)
+	result = append(result, '[')
+	for i, v := range values {
+		if i > 0 {
+			result = append(result, ',')
+		}
+		result = append(result, v...)
+	}
+	result = append(result, ']')
+	return result
 }
 
 // GetString is like Get but accepts a string input
@@ -2187,6 +2425,24 @@ func applyModifier(result Result, modifier string) Result {
 		return applyJoinModifier(result, arg)
 	case "reverse":
 		return applyReverseModifier(result)
+	case "flatten":
+		return applyFlattenModifier(result)
+	case "distinct", "unique":
+		return applyDistinctModifier(result)
+	case "sort":
+		return applySortModifier(result, arg)
+	case "first":
+		return applyFirstModifier(result)
+	case "last":
+		return applyLastModifier(result)
+	case "sum":
+		return applySumModifier(result)
+	case "avg", "average", "mean":
+		return applyAverageModifier(result)
+	case "min":
+		return applyMinModifier(result)
+	case "max":
+		return applyMaxModifier(result)
 	}
 
 	// Return original result if no modifier was applied
@@ -2464,6 +2720,267 @@ func applyReverseModifier(result Result) Result {
 	reversed := buildWildcardResult(values)
 	reversed.Modified = true
 	return reversed
+}
+
+func applyFlattenModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return result
+	}
+
+	var flattened []Result
+	flattenResults(result, &flattened)
+	if len(flattened) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	flattenedResult := buildWildcardResult(flattened)
+	flattenedResult.Modified = true
+	return flattenedResult
+}
+
+func applyDistinctModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return result
+	}
+
+	unique := make([]Result, 0)
+	seen := make(map[string]struct{})
+
+	result.ForEach(func(_, value Result) bool {
+		key := string(value.Raw)
+		if key == "" {
+			key = fmt.Sprintf("%d:%s", value.Type, value.String())
+		}
+		if _, exists := seen[key]; exists {
+			return true
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, value)
+		return true
+	})
+
+	if len(unique) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	distinctResult := buildWildcardResult(unique)
+	distinctResult.Modified = true
+	return distinctResult
+}
+
+func applySortModifier(result Result, arg string) Result {
+	if result.Type != TypeArray {
+		return result
+	}
+
+	items := result.Array()
+	if len(items) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	sorted := make([]Result, len(items))
+	copy(sorted, items)
+
+	descending := strings.EqualFold(arg, "desc") || strings.EqualFold(arg, "descending") || strings.EqualFold(arg, "reverse")
+
+	allNumbers := true
+	for _, item := range sorted {
+		if item.Type != TypeNumber {
+			allNumbers = false
+			break
+		}
+	}
+
+	if allNumbers {
+		sort.Slice(sorted, func(i, j int) bool {
+			if descending {
+				return sorted[i].Float() > sorted[j].Float()
+			}
+			return sorted[i].Float() < sorted[j].Float()
+		})
+	} else {
+		sort.Slice(sorted, func(i, j int) bool {
+			if descending {
+				return sorted[i].String() > sorted[j].String()
+			}
+			return sorted[i].String() < sorted[j].String()
+		})
+	}
+
+	sortedResult := buildWildcardResult(sorted)
+	if sortedResult.Type == TypeUndefined {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+	sortedResult.Modified = true
+	return sortedResult
+}
+
+func applyFirstModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return result
+	}
+
+	first := Result{Type: TypeUndefined}
+	result.ForEach(func(_, value Result) bool {
+		first = value
+		return false
+	})
+	return first
+}
+
+func applyLastModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return result
+	}
+
+	last := Result{Type: TypeUndefined}
+	result.ForEach(func(_, value Result) bool {
+		last = value
+		return true
+	})
+	return last
+}
+
+func applySumModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeUndefined}
+	}
+
+	var sum float64
+	count := 0
+	result.ForEach(func(_, value Result) bool {
+		if num, ok := numericValue(value); ok {
+			sum += num
+			count++
+		}
+		return true
+	})
+
+	if count == 0 {
+		return Result{Type: TypeUndefined}
+	}
+
+	return buildNumberResult(sum)
+}
+
+func applyAverageModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeUndefined}
+	}
+
+	var sum float64
+	count := 0
+	result.ForEach(func(_, value Result) bool {
+		if num, ok := numericValue(value); ok {
+			sum += num
+			count++
+		}
+		return true
+	})
+
+	if count == 0 {
+		return Result{Type: TypeUndefined}
+	}
+
+	return buildNumberResult(sum / float64(count))
+}
+
+func applyMinModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeUndefined}
+	}
+
+	var min float64
+	hasValue := false
+	result.ForEach(func(_, value Result) bool {
+		if num, ok := numericValue(value); ok {
+			if !hasValue || num < min {
+				min = num
+				hasValue = true
+			}
+		}
+		return true
+	})
+
+	if !hasValue {
+		return Result{Type: TypeUndefined}
+	}
+
+	return buildNumberResult(min)
+}
+
+func applyMaxModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeUndefined}
+	}
+
+	var max float64
+	hasValue := false
+	result.ForEach(func(_, value Result) bool {
+		if num, ok := numericValue(value); ok {
+			if !hasValue || num > max {
+				max = num
+				hasValue = true
+			}
+		}
+		return true
+	})
+
+	if !hasValue {
+		return Result{Type: TypeUndefined}
+	}
+
+	return buildNumberResult(max)
+}
+
+func flattenResults(result Result, out *[]Result) {
+	if result.Type != TypeArray {
+		*out = append(*out, result)
+		return
+	}
+
+	result.ForEach(func(_, value Result) bool {
+		if value.Type == TypeArray {
+			flattenResults(value, out)
+		} else {
+			*out = append(*out, value)
+		}
+		return true
+	})
+}
+
+func numericValue(result Result) (float64, bool) {
+	switch result.Type {
+	case TypeNumber:
+		return result.Num, true
+	case TypeString:
+		trimmed := strings.TrimSpace(result.Str)
+		if trimmed == "" {
+			return 0, false
+		}
+		v, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil {
+			return 0, false
+		}
+		return v, true
+	case TypeBoolean:
+		if result.Boolean {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func buildNumberResult(value float64) Result {
+	raw := strconv.FormatFloat(value, 'f', -1, 64)
+	return Result{
+		Type:     TypeNumber,
+		Num:      value,
+		Raw:      []byte(raw),
+		Modified: true,
+	}
 }
 
 // processArrayWildcard processes wildcard access on array elements
@@ -3581,7 +4098,7 @@ func handleLeadingNumber(path string, p int) (int, bool) {
 // scanKey scans a key starting at p and returns the new position and ok
 func scanKey(path string, p int) (int, bool) {
 	keyStart := p
-	for p < len(path) && path[p] != '.' && path[p] != '[' {
+	for p < len(path) && path[p] != '.' && path[p] != '[' && path[p] != '|' && path[p] != '@' {
 		if path[p] == '*' || path[p] == '?' || path[p] == '#' {
 			return p, false
 		}

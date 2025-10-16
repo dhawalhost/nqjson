@@ -354,12 +354,28 @@ if result.Type == njson.TypeString {
 
 ## 📊 Benchmarks
 
-Run benchmarks locally:
+njson benchmarks are in a **separate Go module** (`benchmark/`) with **zero impact** on your dependencies.
 
 ```bash
+# Navigate to benchmark directory
 cd benchmark
-go test -bench=. -benchmem -benchtime=5s
+
+# Run all benchmarks
+go test -bench=. -benchmem
+
+# Run specific categories
+go test -bench=BenchmarkGet -benchmem        # GET operations
+go test -bench=BenchmarkSet -benchmem        # SET operations
+go test -bench=MultiPath -benchmem           # Multipath queries
+go test -bench=Modifier -benchmem            # Extended modifiers
 ```
+
+**Why separate module?** The benchmark directory has its own `go.mod` file. This means:
+- ✅ Main njson library has **ZERO dependencies**
+- ✅ Benchmark dependencies (gjson/sjson) completely isolated
+- ✅ Your `go.mod` stays clean when you install njson
+
+For detailed performance analysis, see [BENCHMARKS.md](BENCHMARKS.md).
 
 ## 🤝 Contributing
 
