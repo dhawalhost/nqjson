@@ -1,9 +1,9 @@
-module github.com/dhawalhost/njson/benchmark
+module github.com/dhawalhost/nqjson/benchmark
 
 go 1.23.10
 
 require (
-	github.com/dhawalhost/njson v0.0.0
+	github.com/dhawalhost/nqjson v0.0.0
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 )
@@ -13,4 +13,4 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 )
 
-replace github.com/dhawalhost/njson => ../
+replace github.com/dhawalhost/nqjson => ../

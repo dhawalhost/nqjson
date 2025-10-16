@@ -6,7 +6,7 @@ import (
 
 	gjson "github.com/tidwall/gjson"
 
-	"github.com/dhawalhost/njson"
+	"github.com/dhawalhost/nqjson"
 )
 
 var (
@@ -140,9 +140,9 @@ func benchmarkNJSONGet(b *testing.B, data []byte, path string) {
 	b.Helper()
 	b.ReportAllocs()
 
-	var res njson.Result
+	var res nqjson.Result
 	for i := 0; i < b.N; i++ {
-		res = njson.Get(data, path)
+		res = nqjson.Get(data, path)
 	}
 	if !res.Exists() {
 		b.Fatalf("njson result missing for path %s", path)

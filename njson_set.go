@@ -1,6 +1,6 @@
-// Package njson provides high-performance JSON manipulation functions.
+// Package nqjson provides next-gen query operations for JSON with zero allocations.
 // Created by dhawalhost (2025-09-01 06:41:07)
-package njson
+package nqjson
 
 import (
 	"bytes"

@@ -1,6 +1,6 @@
-# njson Examples
+# nqjson Examples
 
-This document provides comprehensive examples of using njson for various JSON manipulation tasks.
+This document provides comprehensive examples of using nqjson for various JSON manipulation tasks.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ package main
 
 import (
     "fmt"
-    "github.com/dhawalhost/njson"
+    "github.com/dhawalhost/nqjson"
 )
 
 func main() {
@@ -36,10 +36,10 @@ func main() {
     }`
 
     // Get simple fields
-    id := njson.Get([]byte(json), "user.id")
-    name := njson.Get([]byte(json), "user.name")
-    email := njson.Get([]byte(json), "user.email")
-    active := njson.Get([]byte(json), "user.active")
+    id := nqjson.Get([]byte(json), "user.id")
+    name := nqjson.Get([]byte(json), "user.name")
+    email := nqjson.Get([]byte(json), "user.email")
+    active := nqjson.Get([]byte(json), "user.active")
 
     fmt.Printf("ID: %d\n", id.Int())           // ID: 123
     fmt.Printf("Name: %s\n", name.String())    // Name: Alice Johnson
@@ -55,19 +55,19 @@ func updateUser() {
     json := []byte(`{"user": {"id": 123, "name": "Alice"}}`)
 
     // Update existing field
-    result, err := njson.Set(json, "user.name", "Alice Johnson")
+    result, err := nqjson.Set(json, "user.name", "Alice Johnson")
     if err != nil {
         panic(err)
     }
 
     // Add new field
-    result, err = njson.Set(result, "user.email", "alice@example.com")
+    result, err = nqjson.Set(result, "user.email", "alice@example.com")
     if err != nil {
         panic(err)
     }
 
     // Add nested object
-    result, err = njson.Set(result, "user.preferences.theme", "dark")
+    result, err = nqjson.Set(result, "user.preferences.theme", "dark")
     if err != nil {
         panic(err)
     }
@@ -96,8 +96,8 @@ func dotNotationExamples() {
     }`
 
     // Deep nested access
-    head := njson.Get([]byte(json), "company.departments.engineering.head")
-    budget := njson.Get([]byte(json), "company.departments.engineering.budget")
+    head := nqjson.Get([]byte(json), "company.departments.engineering.head")
+    budget := nqjson.Get([]byte(json), "company.departments.engineering.budget")
 
     fmt.Printf("Engineering Head: %s\n", head.String())
     fmt.Printf("Budget: $%.0f\n", budget.Float())
@@ -117,14 +117,14 @@ func arrayIndexingExamples() {
     }`
 
     // Access by index
-    firstProduct := njson.Get([]byte(json), "products.0.name")
-    lastProductPrice := njson.Get([]byte(json), "products.2.price")
+    firstProduct := nqjson.Get([]byte(json), "products.0.name")
+    lastProductPrice := nqjson.Get([]byte(json), "products.2.price")
 
     fmt.Printf("First Product: %s\n", firstProduct.String())
     fmt.Printf("Last Product Price: $%.2f\n", lastProductPrice.Float())
 
     // Get array length
-    products := njson.Get([]byte(json), "products")
+    products := nqjson.Get([]byte(json), "products")
     if products.IsArray() {
         fmt.Printf("Total Products: %d\n", len(products.Array()))
     }
@@ -161,15 +161,15 @@ func complexPathExamples() {
     }`
 
     // Find books with specific category
-    goBooks := njson.Get([]byte(json), "store.books.#(categories.#(#==\"go\")).title")
+    goBooks := nqjson.Get([]byte(json), "store.books.#(categories.#(#==\"go\")).title")
     fmt.Println("Go Books:", goBooks.String())
 
     // Find expensive books (price > 25)
-    expensiveBooks := njson.Get([]byte(json), "store.books.#(price>25).title")
+    expensiveBooks := nqjson.Get([]byte(json), "store.books.#(price>25).title")
     fmt.Println("Expensive Books:", expensiveBooks.String())
 
     // Get all prices
-    allPrices := njson.Get([]byte(json), "store.books.#.price")
+    allPrices := nqjson.Get([]byte(json), "store.books.#.price")
     if allPrices.IsArray() {
         for _, price := range allPrices.Array() {
             fmt.Printf("Price: $%.2f\n", price.Float())
@@ -201,9 +201,9 @@ func typeSafeAccess() {
     data := []byte(json)
 
     // Safe type conversion with existence check
-    if id := njson.Get(data, "user.id"); id.Exists() {
+    if id := nqjson.Get(data, "user.id"); id.Exists() {
         switch id.Type {
-        case njson.TypeNumber:
+        case nqjson.TypeNumber:
             fmt.Printf("User ID: %d\n", id.Int())
         default:
             fmt.Printf("User ID (as string): %s\n", id.String())
@@ -211,13 +211,13 @@ func typeSafeAccess() {
     }
 
     // Handle different number types
-    balance := njson.Get(data, "user.balance")
-    if balance.Exists() && balance.Type == njson.TypeNumber {
+    balance := nqjson.Get(data, "user.balance")
+    if balance.Exists() && balance.Type == nqjson.TypeNumber {
         fmt.Printf("Balance: $%.2f\n", balance.Float())
     }
 
     // Array handling
-    tags := njson.Get(data, "user.tags")
+    tags := nqjson.Get(data, "user.tags")
     if tags.IsArray() {
         fmt.Print("Tags: ")
         for i, tag := range tags.Array() {
@@ -230,8 +230,8 @@ func typeSafeAccess() {
     }
 
     // Object handling
-    metadata := njson.Get(data, "user.metadata")
-    if metadata.Type == njson.TypeObject {
+    metadata := nqjson.Get(data, "user.metadata")
+    if metadata.Type == nqjson.TypeObject {
         metaMap := metadata.Map()
         for key, value := range metaMap {
             fmt.Printf("Metadata %s: %s\n", key, value.String())
@@ -248,23 +248,23 @@ func defaultValueHandling() {
     data := []byte(json)
 
     // Provide defaults for missing values
-    name := njson.Get(data, "user.name")
-    email := njson.Get(data, "user.email")
-    age := njson.Get(data, "user.age")
+    name := nqjson.Get(data, "user.name")
+    email := nqjson.Get(data, "user.email")
+    age := nqjson.Get(data, "user.age")
 
     fmt.Printf("Name: %s\n", getStringOrDefault(name, "Unknown"))
     fmt.Printf("Email: %s\n", getStringOrDefault(email, "no-email@example.com"))
     fmt.Printf("Age: %d\n", getIntOrDefault(age, 0))
 }
 
-func getStringOrDefault(result njson.Result, defaultValue string) string {
+func getStringOrDefault(result nqjson.Result, defaultValue string) string {
     if result.Exists() {
         return result.String()
     }
     return defaultValue
 }
 
-func getIntOrDefault(result njson.Result, defaultValue int64) int64 {
+func getIntOrDefault(result nqjson.Result, defaultValue int64) int64 {
     if result.Exists() {
         return result.Int()
     }
@@ -281,13 +281,13 @@ func arrayManipulation() {
     json := []byte(`{"items": [1, 2, 3]}`)
 
     // Append to array
-    result, err := njson.Set(json, "items.-1", 4)
+    result, err := nqjson.Set(json, "items.-1", 4)
     if err != nil {
         panic(err)
     }
 
     // Insert at specific position
-    result, err = njson.Set(result, "items.1", 1.5)
+    result, err = nqjson.Set(result, "items.1", 1.5)
     if err != nil {
         panic(err)
     }
@@ -297,7 +297,7 @@ func arrayManipulation() {
         "id":   5,
         "name": "New Item",
     }
-    result, err = njson.Set(result, "items.-1", newItem)
+    result, err = nqjson.Set(result, "items.-1", newItem)
     if err != nil {
         panic(err)
     }
@@ -322,22 +322,22 @@ func arrayProcessing() {
     data := []byte(json)
 
     // Get all engineering employees
-    engineers := njson.Get(data, "employees.#(department==\"Engineering\").name")
+    engineers := nqjson.Get(data, "employees.#(department==\"Engineering\").name")
     fmt.Println("Engineers:", engineers.String())
 
     // Get high-salary employees
-    highEarners := njson.Get(data, "employees.#(salary>80000)")
+    highEarners := nqjson.Get(data, "employees.#(salary>80000)")
     if highEarners.IsArray() {
         fmt.Println("High Earners:")
         for _, emp := range highEarners.Array() {
-            name := njson.Get([]byte(emp.Raw), "name")
-            salary := njson.Get([]byte(emp.Raw), "salary")
+            name := nqjson.Get([]byte(emp.Raw), "name")
+            salary := nqjson.Get([]byte(emp.Raw), "salary")
             fmt.Printf("  %s: $%.0f\n", name.String(), salary.Float())
         }
     }
 
     // Calculate average salary
-    salaries := njson.Get(data, "employees.#.salary")
+    salaries := nqjson.Get(data, "employees.#.salary")
     if salaries.IsArray() {
         var total float64
         count := 0
@@ -375,7 +375,7 @@ func dynamicObjectBuilding() {
     result := json
     for path, value := range fields {
         var err error
-        result, err = njson.Set(result, path, value)
+        result, err = nqjson.Set(result, path, value)
         if err != nil {
             panic(err)
         }
@@ -401,7 +401,7 @@ func objectMerging() {
     }`)
 
     // Merge new preferences
-    options := &njson.SetOptions{
+    options := &nqjson.SetOptions{
         MergeObjects: true,
     }
 
@@ -411,7 +411,7 @@ func objectMerging() {
         "timezone": "UTC",
     }
 
-    result, err := njson.SetWithOptions(base, "user.preferences", newPrefs, options)
+    result, err := nqjson.SetWithOptions(base, "user.preferences", newPrefs, options)
     if err != nil {
         panic(err)
     }
@@ -436,7 +436,7 @@ func batchProcessing() {
     }`)
 
     // Get multiple fields efficiently
-    results := njson.GetMany(json,
+    results := nqjson.GetMany(json,
         "users.0.name",
         "users.1.name",
         "users.2.name",
@@ -450,13 +450,13 @@ func batchProcessing() {
     }
 
     // Batch updates using compiled paths for performance
-    nameTemplate, _ := njson.CompileSetPath("users.%d.lastLogin")
+    nameTemplate, _ := nqjson.CompileSetPath("users.%d.lastLogin")
     
     result := json
     for i := 0; i < 3; i++ {
         path := fmt.Sprintf("users.%d.lastLogin", i)
         var err error
-        result, err = njson.Set(result, path, "2023-01-15T10:00:00Z")
+        result, err = nqjson.Set(result, path, "2023-01-15T10:00:00Z")
         if err != nil {
             panic(err)
         }
@@ -481,25 +481,25 @@ func conditionalUpdates() {
     result := json
 
     // Apply discount to in-stock items
-    products := njson.Get(json, "products")
+    products := nqjson.Get(json, "products")
     if products.IsArray() {
         for i, product := range products.Array() {
-            inStock := njson.Get([]byte(product.Raw), "inStock")
-            price := njson.Get([]byte(product.Raw), "price")
+            inStock := nqjson.Get([]byte(product.Raw), "inStock")
+            price := nqjson.Get([]byte(product.Raw), "price")
             
             if inStock.Bool() && price.Float() > 50 {
                 // Apply 10% discount
                 newPrice := price.Float() * 0.9
                 path := fmt.Sprintf("products.%d.price", i)
                 var err error
-                result, err = njson.Set(result, path, newPrice)
+                result, err = nqjson.Set(result, path, newPrice)
                 if err != nil {
                     panic(err)
                 }
                 
                 // Add discount flag
                 discountPath := fmt.Sprintf("products.%d.discounted", i)
-                result, err = njson.Set(result, discountPath, true)
+                result, err = nqjson.Set(result, discountPath, true)
                 if err != nil {
                     panic(err)
                 }
@@ -530,10 +530,10 @@ func dataTransformation() {
     }`)
 
     // Extract and flatten
-    firstName := njson.Get(nested, "user.personal.firstName")
-    lastName := njson.Get(nested, "user.personal.lastName")
-    email := njson.Get(nested, "user.contact.email")
-    phone := njson.Get(nested, "user.contact.phone")
+    firstName := nqjson.Get(nested, "user.personal.firstName")
+    lastName := nqjson.Get(nested, "user.personal.lastName")
+    email := nqjson.Get(nested, "user.contact.email")
+    phone := nqjson.Get(nested, "user.contact.phone")
 
     // Build flat structure
     flat := []byte(`{}`)
@@ -546,7 +546,7 @@ func dataTransformation() {
     result := flat
     for key, value := range flatData {
         var err error
-        result, err = njson.Set(result, key, value)
+        result, err = nqjson.Set(result, key, value)
         if err != nil {
             panic(err)
         }
@@ -563,8 +563,8 @@ func dataTransformation() {
 ```go
 func optimizedOperations() {
     // Compile paths for reuse
-    userPath, _ := njson.CompileSetPath("users.-1")
-    statusPath, _ := njson.CompileSetPath("users.%d.status")
+    userPath, _ := nqjson.CompileSetPath("users.-1")
+    statusPath, _ := nqjson.CompileSetPath("users.%d.status")
 
     json := []byte(`{"users": []}`)
     result := json
@@ -578,7 +578,7 @@ func optimizedOperations() {
 
     for _, user := range users {
         var err error
-        result, err = njson.SetWithCompiledPath(result, userPath, user, nil)
+        result, err = nqjson.SetWithCompiledPath(result, userPath, user, nil)
         if err != nil {
             panic(err)
         }
@@ -595,7 +595,7 @@ func memoryEfficientProcessing() {
     json := []byte(`{"data": {"values": [1, 2, 3, 4, 5]}}`)
 
     // Use Raw for zero-copy string access
-    values := njson.Get(json, "data.values")
+    values := nqjson.Get(json, "data.values")
     if values.IsArray() {
         fmt.Print("Values: ")
         for i, value := range values.Array() {
@@ -613,7 +613,7 @@ func memoryEfficientProcessing() {
     for i := 0; i < 5; i++ {
         path := fmt.Sprintf("data.newValue%d", i)
         var err error
-        json, err = njson.Set(json, path, i*10)
+        json, err = nqjson.Set(json, path, i*10)
         if err != nil {
             panic(err)
         }
@@ -632,12 +632,12 @@ func errorHandlingExamples() {
     json := []byte(`{"user": {"name": "Alice"}}`)
 
     // Handle different error types
-    result, err := njson.Set(json, "invalid..path", "value")
+    result, err := nqjson.Set(json, "invalid..path", "value")
     if err != nil {
         switch err {
-        case njson.ErrInvalidPath:
+        case nqjson.ErrInvalidPath:
             fmt.Println("Path syntax error:", err)
-        case njson.ErrInvalidJSON:
+        case nqjson.ErrInvalidJSON:
             fmt.Println("JSON parsing error:", err)
         default:
             fmt.Println("Other error:", err)
@@ -646,14 +646,14 @@ func errorHandlingExamples() {
     }
 
     // Validate results
-    name := njson.Get(result, "user.name")
+    name := nqjson.Get(result, "user.name")
     if !name.Exists() {
         fmt.Println("Warning: Expected field not found")
         return
     }
 
     // Type validation
-    if name.Type != njson.TypeString {
+    if name.Type != nqjson.TypeString {
         fmt.Printf("Warning: Expected string, got %s\n", name.Type)
         return
     }
@@ -669,7 +669,7 @@ func safeOperations() {
     json := []byte(`{"users": [{"name": "Alice"}]}`)
 
     // Safe array access
-    secondUser := njson.Get(json, "users.1.name")
+    secondUser := nqjson.Get(json, "users.1.name")
     if secondUser.Exists() {
         fmt.Println("Second user:", secondUser.String())
     } else {
@@ -677,9 +677,9 @@ func safeOperations() {
     }
 
     // Safe type conversion
-    age := njson.Get(json, "users.0.age")
+    age := nqjson.Get(json, "users.0.age")
     if age.Exists() {
-        if age.Type == njson.TypeNumber {
+        if age.Type == nqjson.TypeNumber {
             fmt.Printf("Age: %d\n", age.Int())
         } else {
             fmt.Printf("Age (as string): %s\n", age.String())
@@ -689,8 +689,8 @@ func safeOperations() {
     }
 
     // Safe object access
-    profile := njson.Get(json, "users.0.profile")
-    if profile.Exists() && profile.Type == njson.TypeObject {
+    profile := nqjson.Get(json, "users.0.profile")
+    if profile.Exists() && profile.Type == nqjson.TypeObject {
         fmt.Println("Profile found:", string(profile.Raw))
     } else {
         fmt.Println("No profile information")
@@ -698,4 +698,4 @@ func safeOperations() {
 }
 ```
 
-These examples demonstrate the versatility and power of njson for various JSON manipulation tasks. The library's performance optimizations and type-safe operations make it suitable for both simple scripts and high-performance applications.
+These examples demonstrate the versatility and power of nqjson for various JSON manipulation tasks. The library's performance optimizations and type-safe operations make it suitable for both simple scripts and high-performance applications.

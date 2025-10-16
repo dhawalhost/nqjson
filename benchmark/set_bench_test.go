@@ -5,7 +5,7 @@ import (
 
 	sjson "github.com/tidwall/sjson"
 
-	"github.com/dhawalhost/njson"
+	"github.com/dhawalhost/nqjson"
 )
 
 var (
@@ -46,7 +46,7 @@ func benchmarkNJSONSet(b *testing.B, data []byte, path string, value interface{}
 
 	for i := 0; i < b.N; i++ {
 		working := append([]byte(nil), data...)
-		result, err := njson.Set(working, path, value)
+		result, err := nqjson.Set(working, path, value)
 		if err != nil {
 			b.Fatalf("njson set failed for path %s: %v", path, err)
 		}
@@ -192,7 +192,7 @@ func benchmarkNJSONDelete(b *testing.B, data []byte, path string) {
 
 	for i := 0; i < b.N; i++ {
 		working := append([]byte(nil), data...)
-		result, err := njson.Delete(working, path)
+		result, err := nqjson.Delete(working, path)
 		if err != nil {
 			b.Fatalf("njson delete failed for path %s: %v", path, err)
 		}
@@ -254,15 +254,15 @@ func BenchmarkSet_MultipleUpdates_NJSON(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		working := append([]byte(nil), setBaseLarge...)
 		var err error
-		working, err = njson.Set(working, "users.0.name", "Alicia")
+		working, err = nqjson.Set(working, "users.0.name", "Alicia")
 		if err != nil {
 			b.Fatal(err)
 		}
-		working, err = njson.Set(working, "users.1.profile.score", 70.5)
+		working, err = nqjson.Set(working, "users.1.profile.score", 70.5)
 		if err != nil {
 			b.Fatal(err)
 		}
-		working, err = njson.Set(working, "metadata.stats.active", 3)
+		working, err = nqjson.Set(working, "metadata.stats.active", 3)
 		if err != nil {
 			b.Fatal(err)
 		}
