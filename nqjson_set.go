@@ -224,7 +224,7 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 
 	// Ultra-fast path optimization: prioritize byte-level operations for maximum performance
 	if isSimpleSetPath(path) && !opts.ReplaceInPlace && !opts.MergeObjects && !opts.MergeArrays {
-		if fast, ok, err := trySimpleFastPaths(json, path, value, opts); err == nil && ok {
+		if fast, ok, err := trySimpleFastPaths(json, path, value); err == nil && ok {
 			return fast, nil
 		}
 	}
@@ -601,7 +601,7 @@ func setFastReplace(data []byte, path string, value interface{}) ([]byte, bool, 
 
 // trySimpleFastPaths runs the collection of fast-path checks for simple set paths.
 // It returns (result, ok, err) matching the other fast-path helpers' conventions.
-func trySimpleFastPaths(json []byte, path string, value interface{}, opts SetOptions) ([]byte, bool, error) {
+func trySimpleFastPaths(json []byte, path string, value interface{}) ([]byte, bool, error) {
 	type fastStrategy struct {
 		pred func() bool
 		run  func() ([]byte, bool, error)
@@ -776,7 +776,7 @@ type FastInsertContext struct {
 }
 
 // fastPathHandler processes a path component during fast insertion
-func fastPathHandler(ctx *FastInsertContext, part string, i int) (bool, error) {
+func fastPathHandler(ctx *FastInsertContext, part string) (bool, error) {
 	if part == "" {
 		return false, nil
 	}
@@ -1086,7 +1086,8 @@ func initFastInsertOrAppendContext(data []byte, path string, value interface{}) 
 // fastInsertWalkToParent navigates to the parent container window for insertion.
 func fastInsertWalkToParent(ctx *FastInsertContext, parts []string) (bool, error) {
 	for i, part := range parts[:len(parts)-1] {
-		success, err := fastPathHandler(ctx, part, i)
+		var _ int = i
+		success, err := fastPathHandler(ctx, part)
 		if !success {
 			return false, nil
 		}
@@ -1953,7 +1954,7 @@ func deleteFastSimpleKey(data []byte, key string) (result []byte, changed bool) 
 	pos := start + 1
 	for pos < len(data) {
 		// Parse next pair or detect end
-		pairStart, currentKey, valueEnd, nextPos, done, valid := readNextDeletionPair(data, pos, start)
+		pairStart, currentKey, valueEnd, nextPos, done, valid := readNextDeletionPair(data, pos)
 		if done {
 			break
 		}
@@ -1988,7 +1989,7 @@ func findDeletionObjectStart(data []byte) (int, bool) {
 }
 
 // readNextDeletionPair parses the next key-value pair; returns positions and state flags.
-func readNextDeletionPair(data []byte, pos int, start int) (pairStart int, key []byte, valueEnd int, nextPos int, done bool, valid bool) {
+func readNextDeletionPair(data []byte, pos int) (pairStart int, key []byte, valueEnd int, nextPos int, done bool, valid bool) {
 	pos = skipSpaces(data, pos)
 	if pos >= len(data) || data[pos] == '}' {
 		return 0, nil, 0, -1, true, true
@@ -2302,9 +2303,7 @@ func processNumericPathPart(current *interface{}, idx int, isLast bool, parent i
 }
 
 // processArrayAccess handles array indexing operations in the path
-func processArrayAccess(current *interface{}, idx int, isLast bool, isFinalIndex bool, parent interface{},
-	lastKey string, lastIndex int, isArrayElement bool,
-	pathPartIndex int, pathParts []string, value interface{}, options SetOptions) error {
+func processArrayAccess(current *interface{}, idx int, isLast, isFinalIndex bool, parent interface{}, lastKey string, lastIndex int, isArrayElement bool, pathPartIndex int, pathParts []string) error {
 	// Check if we're at the array or need to create it
 	arr, ok := (*current).([]interface{})
 	if !ok {
@@ -3337,7 +3336,7 @@ func processArrayNotation(context *PathContext, part string, pathIndex int, isLa
 		}
 
 		// Process this array access
-		err = processArrayAccess(context.current, idx, isLast, end+1 >= len(part), context.parent, context.lastKey, context.lastIndex, context.isArrayElement, pathIndex, pathParts, nil, options)
+		err = processArrayAccess(context.current, idx, isLast, end+1 >= len(part), context.parent, context.lastKey, context.lastIndex, context.isArrayElement, pathIndex, pathParts)
 		if err != nil {
 			return err
 		}

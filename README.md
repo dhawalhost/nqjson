@@ -21,7 +21,7 @@
 
 ### 💪 **Production Ready**
 - **Thread-safe** - Concurrent access without locks
-- **Battle-tested** - 98.7% test coverage
+- **Battle-tested** - 73.9% test coverage with 168 comprehensive tests
 - **Zero dependencies** - No external runtime dependencies
 - **Type-safe** - Automatic type conversion with validation
 

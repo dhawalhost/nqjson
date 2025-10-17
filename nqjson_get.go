@@ -24,8 +24,8 @@ var (
 
 // String constants for common values and operators
 const (
-	constNull    = "null"
-	constFalse   = "false"
+	constNull = "null"
+	// constFalse   = "false"
 	constString  = "string"
 	constNumber  = "number"
 	constBool    = "bool"
@@ -289,7 +289,7 @@ func getWithOptions(data []byte, path string, opts getOptions) Result {
 	if !opts.allowMultipath || !strings.ContainsAny(path, ",|") {
 		// JSON Lines support: treat leading ".." prefix as newline-delimited documents when applicable.
 		if opts.allowJSONLines && len(path) >= 2 && path[0] == '.' && path[1] == '.' {
-			if jsonLinesResult, handled := getJSONLinesResult(data, path, opts); handled {
+			if jsonLinesResult, handled := getJSONLinesResult(data, path); handled {
 				return jsonLinesResult
 			}
 		}
@@ -491,7 +491,7 @@ func buildNullResult() Result {
 	return Result{Type: TypeNull, Raw: []byte("null"), Modified: true}
 }
 
-func getJSONLinesResult(data []byte, path string, opts getOptions) (Result, bool) {
+func getJSONLinesResult(data []byte, path string) (Result, bool) {
 	values, ok := extractJSONLinesValues(data)
 	if !ok {
 		return Result{}, false
@@ -877,7 +877,8 @@ func getUltraSimplePath(data []byte, path string) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// findKeyInqJSON searches for a key in JSON data and returns its index
+/*
+// DEAD CODE - NEVER CALLED: findKeyInqJSON searches for a key in JSON data and returns its index
 func findKeyInqJSON(data []byte, path string, keyLen, searchLen int) int {
 	for i := 0; i <= len(data)-searchLen; i++ {
 		if data[i] == '"' {
@@ -899,8 +900,10 @@ func findKeyInqJSON(data []byte, path string, keyLen, searchLen int) int {
 	}
 	return -1
 }
+*/
 
-// parseStringValue parses a JSON string value
+/*
+// DEAD CODE - REPLACED BY FAST VARIANTS: parseStringValue parses a JSON string value
 func parseStringValue(data []byte, valueStart int) Result {
 	if valueStart >= len(data) {
 		return Result{Type: TypeUndefined}
@@ -935,7 +938,7 @@ func parseStringValue(data []byte, valueStart int) Result {
 	}
 }
 
-// parseTrueValue parses a JSON true value
+// DEAD CODE - REPLACED BY FAST VARIANTS: parseTrueValue parses a JSON true value
 func parseTrueValue(data []byte, valueStart int) Result {
 	if valueStart+3 < len(data) &&
 		data[valueStart+1] == 'r' &&
@@ -951,7 +954,7 @@ func parseTrueValue(data []byte, valueStart int) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// parseFalseValue parses a JSON false value
+// DEAD CODE - REPLACED BY FAST VARIANTS: parseFalseValue parses a JSON false value
 func parseFalseValue(data []byte, valueStart int) Result {
 	if valueStart+4 < len(data) &&
 		data[valueStart+1] == 'a' &&
@@ -968,7 +971,7 @@ func parseFalseValue(data []byte, valueStart int) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// parseNullValue parses a JSON null value
+// DEAD CODE - REPLACED BY FAST VARIANTS: parseNullValue parses a JSON null value
 func parseNullValue(data []byte, valueStart int) Result {
 	if valueStart+3 < len(data) &&
 		data[valueStart+1] == 'u' &&
@@ -983,7 +986,7 @@ func parseNullValue(data []byte, valueStart int) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// parseObjectValue parses a JSON object value
+// DEAD CODE - REPLACED BY FAST VARIANTS: parseObjectValue parses a JSON object value
 func parseObjectValue(data []byte, valueStart int) Result {
 	objectEnd := findBlockEnd(data, valueStart, '{', '}')
 	if objectEnd == -1 {
@@ -996,7 +999,7 @@ func parseObjectValue(data []byte, valueStart int) Result {
 	}
 }
 
-// parseArrayValue parses a JSON array value
+// DEAD CODE - REPLACED BY FAST VARIANTS: parseArrayValue parses a JSON array value
 func parseArrayValue(data []byte, valueStart int) Result {
 	arrayEnd := findBlockEnd(data, valueStart, '[', ']')
 	if arrayEnd == -1 {
@@ -1008,6 +1011,7 @@ func parseArrayValue(data []byte, valueStart int) Result {
 		Index: valueStart,
 	}
 }
+*/
 
 // getSimplePath handles simple dot notation and basic array access
 // This is optimized for paths like "user.name" or "items[0].id" or "items.0.id"
@@ -1026,9 +1030,10 @@ func getSimplePath(data []byte, path string) Result {
 	}
 
 	// Start recursive descent
-	if data[start] == '{' {
+	switch data[start] {
+	case '{':
 		return parseObjectRecursive(data, start+1, path)
-	} else if data[start] == '[' {
+	case '[':
 		return parseArrayRecursive(data, start+1, path)
 	}
 
@@ -1146,9 +1151,10 @@ func parseObjectRecursive(data []byte, pos int, path string) Result {
 
 			// Continue with remaining path
 			c := data[pos]
-			if c == '{' {
+			switch c {
+			case '{':
 				return parseObjectRecursive(data, pos+1, remainingPath)
-			} else if c == '[' {
+			case '[':
 				return parseArrayRecursive(data, pos+1, remainingPath)
 			}
 
@@ -1192,9 +1198,10 @@ func parseArrayRecursive(data []byte, pos int, path string) Result {
 
 	remainingPath := ""
 	if i < len(path) {
-		if path[i] == '.' {
+		switch path[i] {
+		case '.':
 			remainingPath = path[i+1:]
-		} else if path[i] == '[' {
+		case '[':
 			remainingPath = path[i:]
 		}
 	}
@@ -1240,9 +1247,10 @@ func parseArrayRecursive(data []byte, pos int, path string) Result {
 	}
 
 	// Continue with remaining path
-	if data[pos] == '{' {
+	switch data[pos] {
+	case '{':
 		return parseObjectRecursive(data, pos+1, remainingPath)
-	} else if data[pos] == '[' {
+	case '[':
 		return parseArrayRecursive(data, pos+1, remainingPath)
 	}
 
@@ -1369,7 +1377,8 @@ func vectorizedSkipValue(data []byte, pos, end int) int {
 	}
 }
 
-// handleGetDirectArrayIndex handles paths that start with a numeric array index
+/*
+// DEAD CODE - NEVER CALLED: handleGetDirectArrayIndex handles paths that start with a numeric array index
 func handleGetDirectArrayIndex(data []byte, path string, p, dataStart, dataEnd int) (int, int, int) {
 	// Special case: if the path starts with a number (direct array index)
 	if p < len(path) && path[p] >= '0' && path[p] <= '9' {
@@ -1395,8 +1404,11 @@ func handleGetDirectArrayIndex(data []byte, path string, p, dataStart, dataEnd i
 	}
 	return p, dataStart, dataEnd
 }
+*/
 
-// processGetPathSegment processes a single segment of the path
+/*
+// DEAD CODE - NEVER CALLED: processGetPathSegment processes a single segment of the path
+// This function has no callers in the entire codebase
 func processGetPathSegment(data []byte, path string, p, dataStart, dataEnd int) (int, int, int, error) {
 	keyStart := p
 
@@ -1435,7 +1447,7 @@ func processGetPathSegment(data []byte, path string, p, dataStart, dataEnd int) 
 	return p, dataStart, dataEnd, nil
 }
 
-// processGetKeyAccess handles object key access or numeric array index access
+// DEAD CODE - ONLY CALLED BY DEAD CODE: processGetKeyAccess handles object key access or numeric array index access
 func processGetKeyAccess(data []byte, key string, dataStart, dataEnd int) (int, int, error) {
 	// Check if current data is an array and the key is numeric
 	if dataEnd > dataStart && data[dataStart] == '[' && isNumericKey(key) {
@@ -1461,7 +1473,7 @@ func processGetKeyAccess(data []byte, key string, dataStart, dataEnd int) (int, 
 	}
 }
 
-// processGetBracketAccess handles bracket notation array access like [0]
+// DEAD CODE - ONLY CALLED BY DEAD CODE: processGetBracketAccess handles bracket notation array access like [0]
 func processGetBracketAccess(data []byte, path string, p, dataStart, dataEnd int) (int, int, int, error) {
 	p++ // Skip '['
 
@@ -1485,6 +1497,20 @@ func processGetBracketAccess(data []byte, path string, p, dataStart, dataEnd int
 
 	return p, dataStart + start, dataStart + start + (end - start), nil
 }
+
+// DEAD CODE - ONLY CALLED BY DEAD CODE: isNumericKey checks if a string is entirely numeric
+func isNumericKey(key string) bool {
+	if len(key) == 0 {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		if key[i] < '0' || key[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+*/
 
 // skipStringValue skips over a JSON string value efficiently
 func skipStringValue(data []byte, start int) int {
@@ -1592,17 +1618,17 @@ func ultraFastSkipValue(data []byte, start int) int {
 }
 
 // isNumericKey checks if a key is purely numeric (for array index access)
-func isNumericKey(key string) bool {
-	if len(key) == 0 {
-		return false
-	}
-	for i := 0; i < len(key); i++ {
-		if key[i] < '0' || key[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
+// func isNumericKey(key string) bool {
+// 	if len(key) == 0 {
+// 		return false
+// 	}
+// 	for i := 0; i < len(key); i++ {
+// 		if key[i] < '0' || key[i] > '9' {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }
 
 // fastFindObjectValue finds a key's value in an object, optimized for performance
 func fastFindObjectValue(data []byte, key string) (int, int) {
@@ -2595,7 +2621,7 @@ func processPathToken(current Result, token pathToken, pathTokens []pathToken, i
 	case tokenIndex:
 		return processIndexToken(current, token)
 	case tokenWildcard:
-		return processWildcardToken(current, token, pathTokens, i)
+		return processWildcardToken(current, pathTokens, i)
 	case tokenFilter:
 		return processFilterToken(current, token)
 	case tokenRecursive:
@@ -2636,7 +2662,7 @@ func processIndexToken(current Result, token pathToken) (Result, bool) {
 }
 
 // processWildcardToken handles wildcard access
-func processWildcardToken(current Result, token pathToken, pathTokens []pathToken, i int) (Result, bool) {
+func processWildcardToken(current Result, pathTokens []pathToken, i int) (Result, bool) {
 	if current.Type != TypeArray && current.Type != TypeObject {
 		return Result{Type: TypeUndefined}, true
 	}
@@ -4225,11 +4251,12 @@ func skipValue(data []byte, i int) int {
 					inString = false
 				}
 			} else {
-				if data[i] == '"' {
+				switch data[i] {
+				case '"':
 					inString = true
-				} else if data[i] == '{' {
+				case '{':
 					depth++
-				} else if data[i] == '}' {
+				case '}':
 					depth--
 				}
 			}
@@ -4250,11 +4277,12 @@ func skipValue(data []byte, i int) int {
 					inString = false
 				}
 			} else {
-				if data[i] == '"' {
+				switch data[i] {
+				case '"':
 					inString = true
-				} else if data[i] == '[' {
+				case '[':
 					depth++
-				} else if data[i] == ']' {
+				case ']':
 					depth--
 				}
 			}

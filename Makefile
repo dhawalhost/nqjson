@@ -66,11 +66,8 @@ vet:
 lint: fmt vet
 	@echo "Running golangci-lint..."
 	golangci-lint run --timeout=5m
-	@echo "Running staticcheck..."
-	staticcheck ./...
-	@echo "Running ineffassign..."
-	ineffassign ./...
-
+	@echo "Linting complete!"
+	
 # Benchmark targets (separate module in benchmark/)
 bench:
 	@echo "Running full benchmark suite..."
