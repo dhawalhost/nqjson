@@ -1,6 +1,6 @@
 # NQJSON
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/dhawalhost/nqjson)](https://goreportcard.com/report/github.com/dhawalhost/nqjson) [![GoDoc](https://godoc.org/github.com/dhawalhost/nqjson?status.svg)](https://godoc.org/github.com/dhawalhost/nqjson) [![Static Badge](https://img.shields.io/badge/nqjson-playground-blue)](https://dhawalhost.github.io/nqjson-playground/)
+ [![Static Badge](https://img.shields.io/badge/nqjson-playground-blue)](https://dhawalhost.github.io/nqjson-playground/)
 
 **nqjson** is a high-performance JSON manipulation library for Go that delivers **blazing-fast operations** with **zero allocations** on critical paths. Built for modern applications requiring extreme performance, minimal memory overhead, and advanced JSON processing capabilities.
 
