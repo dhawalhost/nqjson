@@ -102,7 +102,7 @@ type getOptions struct {
 	allowJSONLines bool
 }
 
-// PHASE 3A: Compiled path structure for cached execution
+// Compiled path structure for cached execution
 type compiledPath struct {
 	original string
 	segments []pathSegment
@@ -124,7 +124,7 @@ func Get(data []byte, path string) Result {
 	return getWithOptions(data, path, getOptions{allowMultipath: true, allowJSONLines: true})
 }
 
-// PHASE 3A: GetCached - Optimized version that caches compiled paths
+// GetCached - Optimized version that caches compiled paths
 // Use this for frequently repeated queries with the same path (5-10x faster on hot paths)
 // Thread-safe and suitable for concurrent use
 func GetCached(data []byte, path string) Result {
@@ -149,7 +149,7 @@ func GetCached(data []byte, path string) Result {
 	return result
 }
 
-// PHASE 3A: compilePath - Parse and compile a path for fast repeated execution
+// compilePath - Parse and compile a path for fast repeated execution
 func compilePath(path string) *compiledPath {
 	cp := &compiledPath{
 		original: path,
@@ -168,7 +168,9 @@ func compilePath(path string) *compiledPath {
 	return cp
 }
 
-// PHASE 3A: parsePathSegments - Break path into executable segments
+// parsePathSegments - Break path into executable segments
+//
+//nolint:gocyclo
 func parsePathSegments(path string) []pathSegment {
 	if path == "" {
 		return nil
@@ -242,7 +244,7 @@ func parsePathSegments(path string) []pathSegment {
 	return segments
 }
 
-// PHASE 3A: executeCompiledPath - Fast execution of pre-parsed path
+// executeCompiledPath - Fast execution of pre-parsed path
 func executeCompiledPath(data []byte, cp *compiledPath) Result {
 	if len(data) == 0 {
 		return Result{Type: TypeUndefined}
@@ -278,13 +280,15 @@ func executeCompiledPath(data []byte, cp *compiledPath) Result {
 	return fastParseValue(data[dataStart:dataEnd])
 }
 
+// getWithOptions is the core Get implementation with options for multipath and JSON Lines support.
+//
+//nolint:gocyclo
 func getWithOptions(data []byte, path string, opts getOptions) Result {
 	// Empty path should return non-existent result according to tests
 	if path == "" {
 		return Result{Type: TypeUndefined}
 	}
 
-	// PHASE 1 OPTIMIZATION: Ultra-fast path for simple single keys (90% of use cases)
 	// This avoids multipath detection overhead for the most common case
 	if !opts.allowMultipath || !strings.ContainsAny(path, ",|") {
 		// JSON Lines support: treat leading ".." prefix as newline-delimited documents when applicable.
@@ -372,8 +376,11 @@ func getMultiPathResult(data []byte, path string, opts getOptions) (Result, bool
 	return combined, true
 }
 
+// splitMultiPath splits a path string into multiple segments based on commas, pipes, and whitespace.
+//
+//nolint:gocyclo
 func splitMultiPath(path string) []string {
-	// PHASE 1 OPTIMIZATION: Fast detection for single-path (no split needed)
+	// Fast detection for single-path (no split needed)
 	// Check if path contains comma outside of brackets/quotes
 	hasComma := false
 	bracketDepth := 0
@@ -405,6 +412,7 @@ func splitMultiPath(path string) []string {
 			}
 		case ',':
 			if bracketDepth == 0 {
+				//nolint:ineffassign
 				hasComma = true
 				// Early exit - we found a split point
 				goto doSplit
@@ -767,8 +775,10 @@ func GetMany(data []byte, paths ...string) []Result {
 
 // getUltraSimplePath is an ultra-fast path for very simple JSON with basic paths
 // This handles cases like {"name":"John","age":30} with path "name"
+//
+//nolint:gocyclo
 func getUltraSimplePath(data []byte, path string) Result {
-	// PHASE 2 OPTIMIZATION: Ultra-fast inline object scanning
+	//  Ultra-fast inline object scanning
 	// This path is optimized for single-key lookups in small-medium JSON objects
 	// Target: 20-30ns for optimal performance
 
@@ -790,7 +800,7 @@ func getUltraSimplePath(data []byte, path string) Result {
 	}
 	i++ // Skip '{'
 
-	// PHASE 2: Inline key scanning with early termination
+	// Inline key scanning with early termination
 	// Scan through object keys looking for exact match
 	for i < len(data) {
 		// Skip whitespace
@@ -837,7 +847,7 @@ func getUltraSimplePath(data []byte, path string) Result {
 					return Result{Type: TypeUndefined}
 				}
 
-				// PHASE 2: Inline value parsing (zero allocation)
+				// Inline value parsing (zero allocation)
 				return parseValueAtPosition(data, i)
 			}
 		}
@@ -1015,7 +1025,7 @@ func parseArrayValue(data []byte, valueStart int) Result {
 
 // getSimplePath handles simple dot notation and basic array access
 // This is optimized for paths like "user.name" or "items[0].id" or "items.0.id"
-// PHASE 4: Recursive one-pass path processing
+// Recursive one-pass path processing
 // Process entire path in a single traversal without extracting intermediate values
 //
 //go:inline
@@ -1040,9 +1050,10 @@ func getSimplePath(data []byte, path string) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// PHASE 4: Recursive object parser - processes path segments on the fly
+// Recursive object parser - processes path segments on the fly
 //
 //go:inline
+//nolint:gocyclo
 func parseObjectRecursive(data []byte, pos int, path string) Result {
 	// Parse the first segment of the path
 	segEnd := 0
@@ -1179,8 +1190,9 @@ func parseObjectRecursive(data []byte, pos int, path string) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// PHASE 4: Recursive array parser
+// Recursive array parser
 //
+//nolint:gocyclo
 //go:inline
 func parseArrayRecursive(data []byte, pos int, path string) Result {
 	// Check if path starts with array index
@@ -1257,7 +1269,7 @@ func parseArrayRecursive(data []byte, pos int, path string) Result {
 	return Result{Type: TypeUndefined}
 }
 
-// PHASE 4: Parse value at current position
+// Parse value at current position
 //
 //go:inline
 func parseValueAtPosition(data []byte, pos int) Result {
@@ -1270,8 +1282,9 @@ func parseValueAtPosition(data []byte, pos int) Result {
 	return fastParseValue(data[valueStart:valueEnd])
 }
 
-// PHASE 4: Vectorized value skipper with 8-byte scanning optimization
+// Vectorized value skipper with 8-byte scanning optimization
 //
+//nolint:gocyclo
 //go:inline
 func vectorizedSkipValue(data []byte, pos, end int) int {
 	if pos >= end {
@@ -2299,6 +2312,8 @@ type filterExpr struct {
 // For '@', only treat as a modifier separator when not inside strings/brackets/parentheses
 // and not immediately following a '.'. This preserves cases like "users.@length" as invalid
 // path segments and avoids interference with filter "@.field" usage.
+//
+//nolint:gocyclo
 func parseModifiers(path string) ([]pathToken, string) {
 	var modifiers []pathToken
 
@@ -2412,6 +2427,8 @@ func parseArrayAccess(part string) []pathToken {
 }
 
 // tokenizePath breaks a path into tokens for efficient execution
+//
+//nolint:gocyclo
 func tokenizePath(path string) []pathToken {
 	var tokens []pathToken
 
@@ -3026,6 +3043,8 @@ func recursiveSearch(current Result, remainingTokens []pathToken) Result {
 }
 
 // applyModifier applies a modifier to a result
+//
+//nolint:gocyclo
 func applyModifier(result Result, modifier string) Result {
 	// Parse modifier and argument
 	parts := strings.SplitN(modifier, ":", 2)
@@ -3527,12 +3546,12 @@ func applyMinModifier(result Result) Result {
 		return Result{Type: TypeUndefined}
 	}
 
-	var min float64
+	var m float64
 	hasValue := false
 	result.ForEach(func(_, value Result) bool {
 		if num, ok := numericValue(value); ok {
-			if !hasValue || num < min {
-				min = num
+			if !hasValue || num < m {
+				m = num
 				hasValue = true
 			}
 		}
@@ -3543,20 +3562,19 @@ func applyMinModifier(result Result) Result {
 		return Result{Type: TypeUndefined}
 	}
 
-	return buildNumberResult(min)
+	return buildNumberResult(m)
 }
 
 func applyMaxModifier(result Result) Result {
 	if result.Type != TypeArray {
 		return Result{Type: TypeUndefined}
 	}
-
-	var max float64
+	var m float64
 	hasValue := false
 	result.ForEach(func(_, value Result) bool {
 		if num, ok := numericValue(value); ok {
-			if !hasValue || num > max {
-				max = num
+			if !hasValue || num > m {
+				m = num
 				hasValue = true
 			}
 		}
@@ -3567,7 +3585,7 @@ func applyMaxModifier(result Result) Result {
 		return Result{Type: TypeUndefined}
 	}
 
-	return buildNumberResult(max)
+	return buildNumberResult(m)
 }
 
 func flattenResults(result Result, out *[]Result) {
@@ -3969,14 +3987,15 @@ func skipToNextArrayElement(data []byte, pos int) (int, bool) {
 
 // getArrayElementRange returns the start and end indices (relative to data) of the element at index within an array.
 // Returns (-1, -1) when out of bounds or data is not an array.
-// PHASE 2 OPTIMIZATION: Statistical jump algorithm for large arrays
+//
+//nolint:gocyclo
 func getArrayElementRange(data []byte, index int) (int, int) {
 	pos, isArray := findArrayElementStart(data)
 	if !isArray {
 		return -1, -1
 	}
 
-	// PHASE 2: Statistical jump for large indices
+	// Statistical jump for large indices
 	// Use statistical estimation to jump closer to target index
 	if index > 100 && len(data) > 10000 {
 		// Estimate element size by sampling first few elements
@@ -4030,6 +4049,7 @@ func getArrayElementRange(data []byte, index int) (int, int) {
 				// Adjust position based on comma count
 				if commaCount > index {
 					// Overshot, go back
+					//nolint:ineffassign
 					jumpPos = pos
 				} else {
 					// Use comma count as starting point
@@ -4212,8 +4232,10 @@ func findBlockEnd(data []byte, start int, openChar, closeChar byte) int {
 }
 
 // findStringEnd finds the end of a JSON string, handling escapes
-// PHASE 2: skipValue - Fast value skipping without parsing
+// skipValue - Fast value skipping without parsing
 // Used for efficiently skipping unwanted key-value pairs
+//
+//nolint:gocyclo
 func skipValue(data []byte, i int) int {
 	// Skip leading whitespace
 	for ; i < len(data) && data[i] <= ' '; i++ {
@@ -4423,8 +4445,9 @@ func parseString(data []byte, start int) Result {
 	raw := data[start : end+1]
 	str := raw[1 : len(raw)-1] // Remove quotes
 
-	// PHASE 1 OPTIMIZATION: Zero-copy string conversion for strings without escapes
+	// Zero-copy string conversion for strings without escapes
 	// Fast path for strings without escapes (most common case)
+	//nolint:gosec //G103
 	if !bytes.ContainsAny(str, "\\") {
 		return Result{
 			Type:  TypeString,
@@ -4464,8 +4487,9 @@ func parseNumber(data []byte, start int) Result {
 
 	raw := data[start:end]
 
-	// PHASE 1 OPTIMIZATION: Zero-copy number parsing
+	// Zero-copy number parsing
 	// Fast path for simple integers using unsafe.String
+	//nolint:gosec //G103
 	if !bytes.ContainsAny(raw, ".eE+-") {
 		// It's a simple integer
 		n, err := strconv.ParseInt(unsafe.String(unsafe.SliceData(raw), len(raw)), 10, 64)
@@ -4478,7 +4502,7 @@ func parseNumber(data []byte, start int) Result {
 			}
 		}
 	}
-
+	//nolint:gosec //G103
 	// Parse as float (zero-copy)
 	n, err := strconv.ParseFloat(unsafe.String(unsafe.SliceData(raw), len(raw)), 64)
 	if err != nil {

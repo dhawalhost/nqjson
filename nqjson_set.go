@@ -1085,8 +1085,7 @@ func initFastInsertOrAppendContext(data []byte, path string, value interface{}) 
 
 // fastInsertWalkToParent navigates to the parent container window for insertion.
 func fastInsertWalkToParent(ctx *FastInsertContext, parts []string) (bool, error) {
-	for i, part := range parts[:len(parts)-1] {
-		var _ int = i
+	for _, part := range parts[:len(parts)-1] {
 		success, err := fastPathHandler(ctx, part)
 		if !success {
 			return false, nil
