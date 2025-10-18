@@ -161,16 +161,11 @@ go get github.com/dhawalhost/nqjson
 
 ## 🧩 Go Version Compatibility
 
-Choose the nqjson version based on your Go toolchain:
+nqjson is compatible with >= 1.23.10
 
-- **Go 1.23.10+**: Use latest version
+- **Go 1.23.10+**:
   ```bash
   go get github.com/dhawalhost/nqjson@latest
-  ```
-
-- **Go < 1.23.10**: Use v1.3.1
-  ```bash
-  go get github.com/dhawalhost/nqjson@v1.3.1
   ```
 
 The public API remains consistent across versions.
