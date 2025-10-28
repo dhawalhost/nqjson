@@ -93,8 +93,7 @@ We recognize security researchers who help make nqjson safer:
 ### Contact
 
 For any security-related questions or concerns, please contact:
-- Email: security@[your-domain].com
-- GPG Key: [Your GPG key fingerprint if applicable]
+- Email: dhawalhost@gmail.com
 
 ---
 
