@@ -14,9 +14,12 @@
 
 ### 🎯 **Powerful Features**
 - **Multipath Queries** - Get multiple values in one call: `user.name,user.email,user.age`
-- **8 Advanced Modifiers** - `@distinct`, `@sort`, `@sum`, `@avg`, `@min`, `@max`, `@first`, `@last`
+- **Query Syntax** - Powerful array filtering: `#(age>30)` (first match), `#(age>30)#` (all matches)
+- **20+ Modifiers** - `@reverse`, `@sort`, `@sum`, `@avg`, `@min`, `@max`, `@pretty`, `@ugly`, `@valid`, `@this`, and more
+- **Wildcards** - Multi-char `*` and single-char `?` wildcards: `child*.name`, `item?.value`
 - **Path Caching** - 2-5x speedup with `GetCached()` for hot paths
-- **JSON Lines Support** - Native newline-delimited JSON processing
+- **JSON Lines Support** - Native newline-delimited JSON processing with `..#`
+- **Escape Sequences** - Access keys with dots/colons: `fav\.movie`, `user\:name`
 - **Complete CRUD** - GET, SET, DELETE with atomic operations
 
 ### 💪 **Production Ready**
@@ -51,18 +54,31 @@ sorted := nqjson.Get(json, "items.#.name|@sort")        // Alphabetically sorted
 city := nqjson.Get(json, "address.city")
 
 // Array indexing (multiple styles)
-first := nqjson.Get(json, "items.0")        // Bracket-free
-last := nqjson.Get(json, "items.-1")        // Negative indexing
-range := nqjson.Get(json, "items.0:5")      // Range slicing
+first := nqjson.Get(json, "items.0")        // First element
+last := nqjson.Get(json, "items.3")         // Fourth element
+bracket := nqjson.Get(json, "items[2]")     // Bracket notation
+length := nqjson.Get(json, "items.#")       // Array length
 
-// Wildcards
-allNames := nqjson.Get(json, "users.*.name")           // All user names
-allEmails := nqjson.Get(json, "users.#.email")         // Array iteration
+// Array appending (SET operations)
+json, _ = nqjson.Set(json, "items.-1", "new")      // Append using -1
+json, _ = nqjson.Set(json, "items[-1]", "another") // Bracket notation append
 
-// Filters and queries
-adults := nqjson.Get(json, "users.#(age>=18).name")    // Conditional filtering
-active := nqjson.Get(json, "users.#(status=active)")   // Exact match
-premium := nqjson.Get(json, "users.#(tier=premium).email")  // Complex queries
+// Wildcards (* and ?)
+allNames := nqjson.Get(json, "users.*.name")       // All user names
+allEmails := nqjson.Get(json, "users.#.email")     // Array iteration
+childMatch := nqjson.Get(json, "child*.first")     // Match children, child1, etc.
+singleChar := nqjson.Get(json, "item?.value")      // Match item1, itemA, etc.
+
+// Query syntax - First match #(condition)
+adult := nqjson.Get(json, "users.#(age>=18).name")       // First adult's name
+active := nqjson.Get(json, "users.#(status==\"active\")") // First active user
+
+// Query syntax - All matches #(condition)#
+allAdults := nqjson.Get(json, "users.#(age>=18)#.name")  // All adult names
+allActive := nqjson.Get(json, "users.#(active==true)#")  // All active users
+
+// Pattern matching in queries
+jNames := nqjson.Get(json, "users.#(name%\"J*\")#.email") // Users with J names
 ```
 
 ### ⚙️ Complete CRUD Operations
@@ -101,6 +117,17 @@ max := nqjson.Get(json, "values|@max")
 first := nqjson.Get(json, "items|@first")
 last := nqjson.Get(json, "items|@last")
 flattened := nqjson.Get(json, "nested.arrays|@flatten")
+keys := nqjson.Get(json, "user|@keys")                  // Object keys
+values := nqjson.Get(json, "user|@values")              // Object values
+
+// Modifier chaining with path continuation
+firstReversed := nqjson.Get(json, "children|@reverse|0") // First of reversed
+
+// JSON formatting modifiers
+pretty := nqjson.Get(json, "@pretty")                    // Pretty print
+ugly := nqjson.Get(json, "@ugly")                        // Minify
+valid := nqjson.Get(json, "@valid")                      // Validate JSON
+identity := nqjson.Get(json, "@this")                    // Return unchanged
 ```
 
 ### ⚡ Performance Optimization

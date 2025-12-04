@@ -10,6 +10,10 @@ This document provides comprehensive examples of using nqjson for various JSON m
 - [Array Operations](#array-operations)
 - [Object Operations](#object-operations)
 - [Advanced Patterns](#advanced-patterns)
+- [Query Syntax](#query-syntax)
+- [Modifier Examples](#modifier-examples)
+- [Escape Sequences](#escape-sequences)
+- [JSON Lines Support](#json-lines-support)
 - [Performance Optimizations](#performance-optimizations)
 - [Error Handling](#error-handling)
 
@@ -274,23 +278,84 @@ func getIntOrDefault(result nqjson.Result, defaultValue int64) int64 {
 
 ## Array Operations
 
+### Appending to Arrays
+
+nqjson supports appending elements to arrays using the `-1` index in both dot and bracket notation:
+
+```go
+func appendingToArrays() {
+    // Starting with a simple array
+    json := []byte(`{"items": [1, 2, 3]}`)
+    
+    // Append using dot notation
+    result, err := nqjson.Set(json, "items.-1", 4)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(string(result))  // {"items":[1,2,3,4]}
+    
+    // Append using bracket notation
+    result, err = nqjson.Set(result, "items[-1]", 5)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(string(result))  // {"items":[1,2,3,4,5]}
+    
+    // Append an object
+    json2 := []byte(`{"users": [{"name": "Alice"}]}`)
+    newUser := map[string]interface{}{
+        "name": "Bob",
+        "age":  30,
+    }
+    result, err = nqjson.Set(json2, "users.-1", newUser)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(string(result))
+    // {"users":[{"name":"Alice"},{"name":"Bob","age":30}]}
+    
+    // Append to nested arrays
+    json3 := []byte(`{"groups": [{"members": ["Alice", "Bob"]}]}`)
+    result, err = nqjson.Set(json3, "groups.0.members.-1", "Charlie")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(string(result))
+    // {"groups":[{"members":["Alice","Bob","Charlie"]}]}
+    
+    // Multiple appends
+    json4 := []byte(`{"tags": []}`)
+    tags := []string{"golang", "json", "performance"}
+    for _, tag := range tags {
+        json4, err = nqjson.Set(json4, "tags.-1", tag)
+        if err != nil {
+            panic(err)
+        }
+    }
+    fmt.Println(string(json4))
+    // {"tags":["golang","json","performance"]}
+}
+```
+
 ### Array Manipulation
 
 ```go
 func arrayManipulation() {
     json := []byte(`{"items": [1, 2, 3]}`)
 
-    // Append to array
-    result, err := nqjson.Set(json, "items.-1", 4)
+    // Replace specific element
+    result, err := nqjson.Set(json, "items.1", 1.5)
     if err != nil {
         panic(err)
     }
+    fmt.Println(string(result))  // {"items":[1,1.5,3]}
 
-    // Insert at specific position
-    result, err = nqjson.Set(result, "items.1", 1.5)
+    // Expand array by setting high index (fills with nulls)
+    result, err = nqjson.Set(json, "items.5", 6)
     if err != nil {
         panic(err)
     }
+    fmt.Println(string(result))  // {"items":[1,2,3,null,null,6]}
 
     // Add object to array
     newItem := map[string]interface{}{
@@ -695,6 +760,313 @@ func safeOperations() {
     } else {
         fmt.Println("No profile information")
     }
+}
+```
+
+## Query Syntax
+
+### First Match Query #(condition)
+
+```go
+func queryFirstMatch() {
+    json := []byte(`{
+        "friends": [
+            {"first": "Dale", "last": "Murphy", "age": 44},
+            {"first": "Roger", "last": "Craig", "age": 68},
+            {"first": "Jane", "last": "Murphy", "age": 47}
+        ]
+    }`)
+
+    // Find first friend named Dale
+    dale := nqjson.Get(json, `friends.#(first=="Dale").last`)
+    fmt.Println("Dale's last name:", dale.String()) // Murphy
+
+    // Find first friend older than 45
+    older := nqjson.Get(json, `friends.#(age>45).first`)
+    fmt.Println("First friend over 45:", older.String()) // Roger
+
+    // Find first Murphy
+    murphy := nqjson.Get(json, `friends.#(last=="Murphy").first`)
+    fmt.Println("First Murphy:", murphy.String()) // Dale
+}
+```
+
+### All Matches Query #(condition)#
+
+```go
+func queryAllMatches() {
+    json := []byte(`{
+        "friends": [
+            {"first": "Dale", "last": "Murphy", "age": 44, "nets": ["ig", "fb"]},
+            {"first": "Roger", "last": "Craig", "age": 68, "nets": ["fb", "tw"]},
+            {"first": "Jane", "last": "Murphy", "age": 47, "nets": ["ig", "tw"]}
+        ]
+    }`)
+
+    // Find all friends older than 45
+    olderFriends := nqjson.Get(json, `friends.#(age>45)#.first`)
+    fmt.Println("Friends over 45:", olderFriends.Raw) // ["Roger","Jane"]
+
+    // Find all Murphys
+    murphys := nqjson.Get(json, `friends.#(last=="Murphy")#.first`)
+    fmt.Println("All Murphys:", murphys.Raw) // ["Dale","Jane"]
+
+    // Find all friends with Facebook
+    fbFriends := nqjson.Get(json, `friends.#(nets.#(=="fb"))#.first`)
+    fmt.Println("Facebook friends:", fbFriends.Raw) // ["Dale","Roger"]
+}
+```
+
+### Pattern Matching in Queries
+
+```go
+func queryPatternMatching() {
+    json := []byte(`{
+        "users": [
+            {"name": "John Smith", "email": "john@company.com"},
+            {"name": "Jane Doe", "email": "jane@external.org"},
+            {"name": "Jack Wilson", "email": "jack@company.com"}
+        ]
+    }`)
+
+    // Find users whose name starts with "J"
+    jUsers := nqjson.Get(json, `users.#(name%"J*")#.email`)
+    fmt.Println("J users:", jUsers.Raw) // All J users
+
+    // Find users with company.com email
+    companyUsers := nqjson.Get(json, `users.#(email%"*@company.com")#.name`)
+    fmt.Println("Company users:", companyUsers.Raw) // ["John Smith","Jack Wilson"]
+
+    // Find users NOT matching a pattern
+    externalUsers := nqjson.Get(json, `users.#(email!%"*@company.com")#.name`)
+    fmt.Println("External users:", externalUsers.Raw) // ["Jane Doe"]
+}
+```
+
+## Modifier Examples
+
+### Array Transformation Modifiers
+
+```go
+func arrayModifiers() {
+    json := []byte(`{
+        "children": ["Sara", "Alex", "Jack"],
+        "scores": [85, 92, 78, 95, 88]
+    }`)
+
+    // Reverse array
+    reversed := nqjson.Get(json, "children|@reverse")
+    fmt.Println("Reversed:", reversed.Raw) // ["Jack","Alex","Sara"]
+
+    // Sort array
+    sorted := nqjson.Get(json, "scores|@sort")
+    fmt.Println("Sorted:", sorted.Raw) // [78,85,88,92,95]
+
+    // Sort descending (chain sort and reverse)
+    sortedDesc := nqjson.Get(json, "scores|@sort|@reverse")
+    fmt.Println("Sorted desc:", sortedDesc.Raw) // [95,92,88,85,78]
+
+    // First and last
+    first := nqjson.Get(json, "children|@first")
+    last := nqjson.Get(json, "children|@last")
+    fmt.Println("First:", first.String(), "Last:", last.String())
+}
+```
+
+### Aggregate Modifiers
+
+```go
+func aggregateModifiers() {
+    json := []byte(`{
+        "prices": [19.99, 29.99, 39.99, 49.99],
+        "quantities": [2, 5, 3, 1]
+    }`)
+
+    // Sum
+    total := nqjson.Get(json, "prices|@sum")
+    fmt.Printf("Total: $%.2f\n", total.Float()) // 139.96
+
+    // Average
+    avg := nqjson.Get(json, "prices|@avg")
+    fmt.Printf("Average: $%.2f\n", avg.Float()) // 34.99
+
+    // Min and Max
+    min := nqjson.Get(json, "prices|@min")
+    max := nqjson.Get(json, "prices|@max")
+    fmt.Printf("Price range: $%.2f - $%.2f\n", min.Float(), max.Float())
+
+    // Count
+    count := nqjson.Get(json, "prices|@count")
+    fmt.Printf("Number of prices: %d\n", count.Int()) // 4
+}
+```
+
+### Object Modifiers
+
+```go
+func objectModifiers() {
+    json := []byte(`{
+        "user": {
+            "name": "Alice",
+            "age": 30,
+            "email": "alice@example.com",
+            "city": "NYC"
+        }
+    }`)
+
+    // Get object keys
+    keys := nqjson.Get(json, "user|@keys")
+    fmt.Println("Keys:", keys.Raw) // ["name","age","email","city"]
+
+    // Get object values
+    values := nqjson.Get(json, "user|@values")
+    fmt.Println("Values:", values.Raw) // ["Alice",30,"alice@example.com","NYC"]
+}
+```
+
+### Format Modifiers
+
+```go
+func formatModifiers() {
+    json := []byte(`{"name":"Alice","age":30,"city":"NYC"}`)
+
+    // Pretty print
+    pretty := nqjson.Get(json, "@pretty")
+    fmt.Println("Pretty:", pretty.Raw)
+    // {
+    //   "name": "Alice",
+    //   "age": 30,
+    //   "city": "NYC"
+    // }
+
+    // Pretty with custom indent
+    prettyTab := nqjson.Get(json, `@pretty:{"indent":"\t"}`)
+    fmt.Println("Pretty with tabs:", prettyTab.Raw)
+
+    // Minify (ugly)
+    ugly := nqjson.Get([]byte(`{
+        "name": "Alice",
+        "age": 30
+    }`), "@ugly")
+    fmt.Println("Minified:", ugly.Raw) // {"name":"Alice","age":30}
+
+    // Validate JSON
+    valid := nqjson.Get(json, "@valid")
+    fmt.Println("Valid JSON:", valid.Exists()) // true
+
+    // Identity (@this)
+    identity := nqjson.Get(json, "@this")
+    fmt.Println("Identity:", identity.Raw) // Same as input
+}
+```
+
+### Modifier Chaining with Path Continuation
+
+```go
+func modifierChaining() {
+    json := []byte(`{
+        "items": [
+            {"name": "Apple", "price": 1.50},
+            {"name": "Banana", "price": 0.75},
+            {"name": "Cherry", "price": 2.00}
+        ]
+    }`)
+
+    // Reverse and get first (effectively last item)
+    lastItem := nqjson.Get(json, "items|@reverse|0")
+    fmt.Println("Last item:", lastItem.Raw) // {"name":"Cherry","price":2.00}
+
+    // Get name of last item
+    lastName := nqjson.Get(json, "items|@reverse|0.name")
+    fmt.Println("Last item name:", lastName.String()) // Cherry
+
+    // Chain multiple operations
+    prices := nqjson.Get(json, "items.#.price|@sort|@reverse")
+    fmt.Println("Prices (high to low):", prices.Raw) // [2,1.5,0.75]
+}
+```
+
+## Escape Sequences
+
+### Keys with Special Characters
+
+```go
+func escapeSequences() {
+    // JSON with special characters in keys
+    json := []byte(`{
+        "fav.movie": "Inception",
+        "user:config": {"theme": "dark"},
+        "path\\to\\file": "readme.txt"
+    }`)
+
+    // Access key with dot using \. escape
+    movie := nqjson.Get(json, `fav\.movie`)
+    fmt.Println("Favorite movie:", movie.String()) // Inception
+
+    // Access key with colon using \: escape
+    theme := nqjson.Get(json, `user\:config.theme`)
+    fmt.Println("Theme:", theme.String()) // dark
+
+    // SET with escaped keys
+    result, _ := nqjson.Set(json, `user\:config.language`, []byte(`"en"`))
+    fmt.Println("Updated:", string(result))
+}
+```
+
+### Numeric Keys as Object Properties
+
+```go
+func numericKeys() {
+    // JSON with numeric string keys (not array indices)
+    json := []byte(`{
+        "data": {
+            "123": "first value",
+            "456": {"nested": "second value"}
+        }
+    }`)
+
+    // Use : prefix to treat as object key, not array index
+    first := nqjson.Get(json, "data.:123")
+    fmt.Println("Value at '123':", first.String()) // first value
+
+    second := nqjson.Get(json, "data.:456.nested")
+    fmt.Println("Nested value:", second.String()) // second value
+
+    // SET with numeric object keys
+    result, _ := nqjson.Set(json, "data.:789", []byte(`"new value"`))
+    fmt.Println("Updated:", string(result))
+}
+```
+
+## JSON Lines Support
+
+### Processing JSON Lines
+
+```go
+func jsonLinesProcessing() {
+    // JSON Lines format (newline-delimited JSON)
+    jsonLines := []byte(`{"name": "Alice", "age": 30}
+{"name": "Bob", "age": 25}
+{"name": "Charlie", "age": 35}`)
+
+    // Count lines
+    count := nqjson.Get(jsonLines, "..#")
+    fmt.Printf("Number of lines: %d\n", count.Int()) // 3
+
+    // Access specific line
+    firstLine := nqjson.Get(jsonLines, "..0")
+    fmt.Println("First line:", firstLine.Raw)
+
+    secondName := nqjson.Get(jsonLines, "..1.name")
+    fmt.Println("Second person:", secondName.String()) // Bob
+
+    // Get field from all lines
+    allNames := nqjson.Get(jsonLines, "..#.name")
+    fmt.Println("All names:", allNames.Raw) // ["Alice","Bob","Charlie"]
+
+    // Query across lines
+    olderThan30 := nqjson.Get(jsonLines, "..#(age>30)#.name")
+    fmt.Println("Older than 30:", olderThan30.Raw) // ["Charlie"]
 }
 ```
 

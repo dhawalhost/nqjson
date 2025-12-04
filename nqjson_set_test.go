@@ -277,6 +277,162 @@ func TestSet_ArrayOperations(t *testing.T) {
 	}
 }
 
+// TestSet_AppendWithNegativeIndex tests the -1 index for appending to arrays
+func TestSet_AppendWithNegativeIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		json      []byte
+		path      string
+		value     interface{}
+		wantError bool
+		validate  func(t *testing.T, result []byte)
+	}{
+		{
+			name:      "append_to_simple_array_with_minus_one",
+			json:      []byte(`{"items":[1,2,3]}`),
+			path:      "items.-1",
+			value:     4,
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "items.3")
+				if !getValue.Exists() || getValue.Int() != 4 {
+					t.Errorf("Expected 4 at items.3, got %v", getValue.Int())
+				}
+				// Verify array length is 4
+				items := Get(result, "items")
+				if len(items.Array()) != 4 {
+					t.Errorf("Expected array length 4, got %d", len(items.Array()))
+				}
+			},
+		},
+		{
+			name:      "append_string_to_array",
+			json:      []byte(`{"tags":["go","json"]}`),
+			path:      "tags.-1",
+			value:     "performance",
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "tags.2")
+				if !getValue.Exists() || getValue.String() != "performance" {
+					t.Errorf("Expected 'performance', got %q", getValue.String())
+				}
+			},
+		},
+		{
+			name:      "append_object_to_array",
+			json:      []byte(`{"users":[{"name":"Alice"}]}`),
+			path:      "users.-1",
+			value:     map[string]interface{}{"name": "Bob", "age": 30},
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "users.1.name")
+				if !getValue.Exists() || getValue.String() != "Bob" {
+					t.Errorf("Expected 'Bob', got %q", getValue.String())
+				}
+				getValue = Get(result, "users.1.age")
+				if !getValue.Exists() || getValue.Int() != 30 {
+					t.Errorf("Expected 30, got %d", getValue.Int())
+				}
+			},
+		},
+		{
+			name:      "append_to_empty_array",
+			json:      []byte(`{"items":[]}`),
+			path:      "items.-1",
+			value:     "first",
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "items.0")
+				if !getValue.Exists() || getValue.String() != "first" {
+					t.Errorf("Expected 'first', got %q", getValue.String())
+				}
+			},
+		},
+		{
+			name:      "append_multiple_times",
+			json:      []byte(`{"items":[1,2]}`),
+			path:      "items.-1",
+			value:     3,
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				// Append second value
+				result2, err := Set(result, "items.-1", 4)
+				if err != nil {
+					t.Errorf("Second append failed: %v", err)
+					return
+				}
+				getValue := Get(result2, "items.3")
+				if !getValue.Exists() || getValue.Int() != 4 {
+					t.Errorf("Expected 4 at items.3, got %v", getValue.Int())
+				}
+				// Verify both appends worked
+				items := Get(result2, "items")
+				if len(items.Array()) != 4 {
+					t.Errorf("Expected array length 4, got %d", len(items.Array()))
+				}
+			},
+		},
+		{
+			name:      "append_to_nested_array",
+			json:      []byte(`{"data":{"values":[10,20]}}`),
+			path:      "data.values.-1",
+			value:     30,
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "data.values.2")
+				if !getValue.Exists() || getValue.Int() != 30 {
+					t.Errorf("Expected 30, got %v", getValue.Int())
+				}
+			},
+		},
+		{
+			name:      "append_with_bracket_notation",
+			json:      []byte(`{"items":[1,2,3]}`),
+			path:      "items[-1]",
+			value:     4,
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "items.3")
+				if !getValue.Exists() || getValue.Int() != 4 {
+					t.Errorf("Expected 4 at items.3, got %v", getValue.Int())
+				}
+			},
+		},
+		{
+			name:      "append_nested_object",
+			json:      []byte(`{"records":[]}`),
+			path:      "records.-1",
+			value:     map[string]interface{}{"id": 1, "data": map[string]interface{}{"status": "active"}},
+			wantError: false,
+			validate: func(t *testing.T, result []byte) {
+				getValue := Get(result, "records.0.id")
+				if !getValue.Exists() || getValue.Int() != 1 {
+					t.Errorf("Expected id=1, got %v", getValue.Int())
+				}
+				getValue = Get(result, "records.0.data.status")
+				if !getValue.Exists() || getValue.String() != "active" {
+					t.Errorf("Expected status='active', got %q", getValue.String())
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Set(tt.json, tt.path, tt.value)
+
+			if (err != nil) != tt.wantError {
+				t.Errorf("Set() error = %v, wantError %v", err, tt.wantError)
+				return
+			}
+
+			if !tt.wantError && tt.validate != nil {
+				tt.validate(t, result)
+			}
+		})
+	}
+}
+
 // TestSet_NestedOperations tests nested SET functionality using table-driven tests
 func TestSet_NestedOperations(t *testing.T) {
 	tests := []struct {
@@ -875,16 +1031,16 @@ func TestSet_EdgeCases(t *testing.T) {
 			json:      nil,
 			path:      "key",
 			value:     "value",
-			wantError: true,
-			desc:      "Nil JSON should return error",
+			wantError: false, // sjson behavior: create new object from empty/nil JSON
+			desc:      "Nil JSON creates new object (sjson compatible)",
 		},
 		{
 			name:      "empty_json",
 			json:      []byte(``),
 			path:      "key",
 			value:     "value",
-			wantError: true,
-			desc:      "Empty JSON should return error",
+			wantError: false, // sjson behavior: create new object from empty JSON
+			desc:      "Empty JSON creates new object (sjson compatible)",
 		},
 		{
 			name:      "special_characters_in_key",
@@ -1468,6 +1624,193 @@ func TestSetFastDeepCreateObjects(t *testing.T) {
 			depth := strings.Count(tt.path, ".") + 1
 			if depth != tt.depth {
 				t.Errorf("Expected depth %d, got %d", tt.depth, depth)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// ESCAPE AND COLON PREFIX TESTS - SET OPERATIONS (from escape_colon_test.go)
+// =============================================================================
+
+func TestEscapeSequences_Set(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		value    string
+		expected string
+	}{
+		{
+			name:     "escaped_dot_in_key_set",
+			json:     `{"fav.movie":"Inception"}`,
+			path:     `fav\.movie`,
+			value:    `"Interstellar"`,
+			expected: `{"fav.movie":"Interstellar"}`,
+		},
+		{
+			name:     "escaped_colon_in_key_set",
+			json:     `{"user:name":"John"}`,
+			path:     `user\:name`,
+			value:    `"Jane"`,
+			expected: `{"user:name":"Jane"}`,
+		},
+		{
+			name:     "escaped_backslash_in_key_set",
+			json:     `{"path\\to\\file":"readme.txt"}`,
+			path:     `path\\to\\file`,
+			value:    `"index.html"`,
+			expected: `{"path\\to\\file":"index.html"}`,
+		},
+		{
+			name:     "multiple_escapes_in_path_set",
+			json:     `{"a.b":{"c:d":"value1"}}`,
+			path:     `a\.b.c\:d`,
+			value:    `"value2"`,
+			expected: `{"a.b":{"c:d":"value2"}}`,
+		},
+		{
+			name:     "nested_path_with_escapes_set",
+			json:     `{"user":{"first.name":"John","last:name":"Doe"}}`,
+			path:     `user.first\.name`,
+			value:    `"Jane"`,
+			expected: `{"user":{"first.name":"Jane","last:name":"Doe"}}`,
+		},
+		{
+			name:     "create_key_with_escaped_chars",
+			json:     `{}`,
+			path:     `new\.key`,
+			value:    `"test"`,
+			expected: `{"new.key":"test"}`,
+		},
+		{
+			name:     "array_with_escaped_key_set",
+			json:     `{"items":[{"id.value":1},{"id.value":2}]}`,
+			path:     `items.0.id\.value`,
+			value:    `100`,
+			expected: `{"items":[{"id.value":100},{"id.value":2}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Set([]byte(tt.json), tt.path, []byte(tt.value))
+			if err != nil {
+				t.Errorf("Set error: %v", err)
+				return
+			}
+			got, _ := Ugly(result)
+			exp, _ := Ugly([]byte(tt.expected))
+			if string(got) != string(exp) {
+				t.Errorf("Set(%q, %q) = %q, want %q", tt.path, tt.value, got, exp)
+			}
+		})
+	}
+}
+
+func TestColonPrefix_Set(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		value    string
+		expected string
+	}{
+		{
+			name:     "numeric_key_without_colon_set",
+			json:     `{"users":[{"name":"Alice"},{"name":"Bob"}]}`,
+			path:     `users.0.name`,
+			value:    `"Charlie"`,
+			expected: `{"users":[{"name":"Charlie"},{"name":"Bob"}]}`,
+		},
+		{
+			name:     "numeric_key_with_colon_set",
+			json:     `{"users":{"2313":{"name":"Alice"}}}`,
+			path:     `users.:2313.name`,
+			value:    `"Charlie"`,
+			expected: `{"users":{"2313":{"name":"Charlie"}}}`,
+		},
+		{
+			name:     "create_numeric_object_key_with_colon",
+			json:     `{"data":{}}`,
+			path:     `data.:123`,
+			value:    `"value"`,
+			expected: `{"data":{"123":"value"}}`,
+		},
+		{
+			name:     "mixed_colon_and_regular_path_set",
+			json:     `{"root":{"456":{"nested":"old"}}}`,
+			path:     `root.:456.nested`,
+			value:    `"new"`,
+			expected: `{"root":{"456":{"nested":"new"}}}`,
+		},
+		{
+			name:     "multiple_numeric_keys_with_colon_set",
+			json:     `{"a":{"123":{"456":"old"}}}`,
+			path:     `a.:123.:456`,
+			value:    `"new"`,
+			expected: `{"a":{"123":{"456":"new"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Set([]byte(tt.json), tt.path, []byte(tt.value))
+			if err != nil {
+				t.Errorf("Set error: %v", err)
+				return
+			}
+			got, _ := Ugly(result)
+			exp, _ := Ugly([]byte(tt.expected))
+			if string(got) != string(exp) {
+				t.Errorf("Set(%q, %q) = %q, want %q", tt.path, tt.value, got, exp)
+			}
+		})
+	}
+}
+
+func TestCombinedEscapeAndColon_Set(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		value    string
+		expected string
+	}{
+		{
+			name:     "escaped_dot_and_colon_prefix_set",
+			json:     `{"user.data":{"123":"old"}}`,
+			path:     `user\.data.:123`,
+			value:    `"new"`,
+			expected: `{"user.data":{"123":"new"}}`,
+		},
+		{
+			name:     "complex_path_with_both_features_set",
+			json:     `{"app:config":{"server.address":{"8080":"localhost"}}}`,
+			path:     `app\:config.server\.address.:8080`,
+			value:    `"127.0.0.1"`,
+			expected: `{"app:config":{"server.address":{"8080":"127.0.0.1"}}}`,
+		},
+		{
+			name:     "create_complex_nested_structure",
+			json:     `{}`,
+			path:     `data\.store.:100.value\:type`,
+			value:    `"string"`,
+			expected: `{"data.store":{"100":{"value:type":"string"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Set([]byte(tt.json), tt.path, []byte(tt.value))
+			if err != nil {
+				t.Errorf("Set error: %v", err)
+				return
+			}
+			got, _ := Ugly(result)
+			exp, _ := Ugly([]byte(tt.expected))
+			if string(got) != string(exp) {
+				t.Errorf("Set(%q, %q) = %q, want %q", tt.path, tt.value, got, exp)
 			}
 		})
 	}

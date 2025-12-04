@@ -222,6 +222,13 @@ func SetWithOptions(json []byte, path string, value interface{}, options *SetOpt
 		return json, ErrInvalidPath
 	}
 
+	// Handle empty or whitespace-only JSON document - create new object
+	// This matches sjson behavior: Set("", "name", "Tom") creates {"name":"Tom"}
+	trimmed := bytes.TrimSpace(json)
+	if len(trimmed) == 0 {
+		json = []byte("{}")
+	}
+
 	// Ultra-fast path optimization: prioritize byte-level operations for maximum performance
 	if isSimpleSetPath(path) && !opts.ReplaceInPlace && !opts.MergeObjects && !opts.MergeArrays {
 		if fast, ok, err := trySimpleFastPaths(json, path, value); err == nil && ok {
@@ -362,18 +369,26 @@ func isSimpleSetPath(path string) bool {
 	}
 
 	// Should only contain dots, letters, numbers, and brackets with numbers
-	parts := strings.Split(path, ".")
+	// Use escape-aware splitting
+	parts := splitPath(path)
 	for _, part := range parts {
 		if part == "" {
 			continue
 		}
 
-		if strings.Contains(part, "[") {
-			if !validateBracketPart(part) {
+		// Unescape and strip colon prefix for validation
+		unescaped := unescapePath(part)
+		if hasColonPrefix(unescaped) {
+			unescaped = stripColonPrefix(unescaped)
+		}
+
+		if strings.Contains(unescaped, "[") {
+			if !validateBracketPart(unescaped) {
 				return false
 			}
 		} else {
-			if !isValidName(part) {
+			// Check if it's a numeric index (including negative like -1)
+			if !isNumericIndex(unescaped) && !isValidName(unescaped) {
 				return false
 			}
 		}
@@ -415,7 +430,7 @@ func isAllowedNameRune(c rune) bool {
 	return false
 }
 
-// validateBracketPart validates a part that contains bracket notation like "key[0][1]"
+// validateBracketPart validates a part that contains bracket notation like "key[0][1]" or "key[-1]"
 func validateBracketPart(part string) bool {
 	bracketIdx := strings.Index(part, "[")
 	base := part[:bracketIdx]
@@ -434,10 +449,9 @@ func validateBracketPart(part string) bool {
 		end += start
 
 		idx := part[start+1 : end]
-		for _, c := range idx {
-			if c < '0' || c > '9' {
-				return false
-			}
+		// Allow negative indices like -1
+		if !isNumericIndex(idx) {
+			return false
 		}
 
 		// Move to next bracket
@@ -508,7 +522,7 @@ func processPathSegment(window []byte, part string, baseOffset int, isLast bool)
 	}
 
 	// Dot numeric segment means array index
-	if isAllDigits(part) {
+	if isNumericIndex(part) {
 		idx, _ := strconv.Atoi(part)
 		s, e := getArrayElementRange(window, idx)
 		if s < 0 {
@@ -569,8 +583,8 @@ func setFastReplace(data []byte, path string, value interface{}) ([]byte, bool, 
 		return nil, false, nil
 	}
 
-	// Split path parts
-	parts := strings.Split(path, ".")
+	// Split path parts using escape-aware splitting
+	parts := splitPath(path)
 
 	// Track current window of data that contains the target value and its base offset in original data
 	window := data
@@ -585,8 +599,15 @@ func setFastReplace(data []byte, path string, value interface{}) ([]byte, bool, 
 		}
 		isLast := i == len(parts)-1
 
+		// Unescape and strip colon prefix
+		unescaped := unescapePath(part)
+		forceObjectKey := hasColonPrefix(unescaped)
+		if forceObjectKey {
+			unescaped = stripColonPrefix(unescaped)
+		}
+
 		var err error
-		window, baseOffset, valueStart, valueEnd, err = processPathSegment(window, part, baseOffset, isLast)
+		window, baseOffset, valueStart, valueEnd, err = processPathSegment(window, unescaped, baseOffset, isLast)
 		if err != nil {
 			return nil, false, nil
 		}
@@ -781,6 +802,13 @@ func fastPathHandler(ctx *FastInsertContext, part string) (bool, error) {
 		return false, nil
 	}
 
+	// Unescape and check for colon prefix
+	unescaped := unescapePath(part)
+	forceObjectKey := hasColonPrefix(part)
+	if forceObjectKey {
+		unescaped = stripColonPrefix(unescaped)
+	}
+
 	// Handle bracket notation in part (e.g., "users[0][name]")
 	if strings.Contains(part, "[") {
 		success, err := handleBracketNotation(ctx, part)
@@ -790,9 +818,9 @@ func fastPathHandler(ctx *FastInsertContext, part string) (bool, error) {
 		return true, nil
 	}
 
-	// Handle numeric indices directly (e.g., "users.0.name")
-	if isAllDigits(part) {
-		success := handleNumericIndex(ctx, part)
+	// Handle numeric indices directly (e.g., "users.0.name") - only if not forced to object key
+	if !forceObjectKey && isAllDigits(unescaped) {
+		success := handleNumericIndex(ctx, unescaped)
 		if !success {
 			return false, nil
 		}
@@ -800,7 +828,7 @@ func fastPathHandler(ctx *FastInsertContext, part string) (bool, error) {
 	}
 
 	// Handle simple object key
-	s, e := getObjectValueRange(ctx.window, part)
+	s, e := getObjectValueRange(ctx.window, unescaped)
 	if s < 0 {
 		return false, nil
 	}
@@ -1052,6 +1080,11 @@ func setFastInsertOrAppend(data []byte, path string, value interface{}) ([]byte,
 		return nil, false, nil
 	}
 	last := parts[len(parts)-1]
+	// Unescape and strip colon prefix for proper key/index handling
+	last = unescapePath(last)
+	if hasColonPrefix(last) {
+		last = stripColonPrefix(last)
+	}
 	switch container {
 	case '{':
 		return handleObjectInsertion(data, ctx.window, parentStart, parentEnd, last, encVal)
@@ -1070,7 +1103,12 @@ func initFastInsertOrAppendContext(data []byte, path string, value interface{}) 
 	if len(data) == 0 || value == nil {
 		return nil, nil, false
 	}
-	parts := strings.Split(path, ".")
+	// Don't handle bracket notation in fast path
+	if strings.Contains(path, "[") {
+		return nil, nil, false
+	}
+	// Use escape-aware splitting
+	parts := splitPath(path)
 	if len(parts) == 0 {
 		return nil, nil, false
 	}
@@ -1600,6 +1638,11 @@ func initializeDeepCreationContext(data []byte, path string) (*DeepCreateContext
 		return nil, false, nil
 	}
 
+	// Don't handle bracket notation in fast path
+	if strings.Contains(path, "[") {
+		return nil, false, nil
+	}
+
 	// Split the path into parts
 	parts := parseObjectPath(path)
 	if len(parts) < 2 {
@@ -1886,8 +1929,15 @@ func setFastDeepCreateObjects(data []byte, path string, value interface{}) ([]by
 // deleteFastPath handles nested path deletions with optimized byte manipulation
 func deleteFastPath(data []byte, path string) ([]byte, bool) {
 	// For now, handle simple nested paths like "address.city"
-	parts := strings.Split(path, ".")
+	// Use escape-aware splitting
+	parts := splitPath(path)
 	if len(parts) < 2 {
+		return nil, false
+	}
+
+	// Check if final part is numeric (array index deletion) - not supported in fast path
+	finalPart := parts[len(parts)-1]
+	if isNumericIndex(finalPart) || finalPart == "-1" {
 		return nil, false
 	}
 
@@ -2135,8 +2185,10 @@ func fastGetObjectValue(obj []byte, key string) []byte {
 // fastEncodeJSONValue encodes basic Go values to JSON without full marshal when possible
 // tryParseStringAsJSON attempts to parse a string as JSON if it looks like JSON
 func tryParseStringAsJSON(val string) ([]byte, bool) {
+	// Check for JSON objects, arrays, or strings
 	if (strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}")) ||
-		(strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")) {
+		(strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")) ||
+		(strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
 		var jsonVal interface{}
 		if err := json.Unmarshal([]byte(val), &jsonVal); err == nil {
 			// It's valid JSON, marshal it directly
@@ -2264,6 +2316,17 @@ func processNumericPathPart(current *interface{}, idx int, isLast bool, parent i
 		return ErrTypeMismatch
 	}
 
+	// Handle negative indices - convert -1 to append position
+	if idx < 0 {
+		if idx == -1 {
+			// -1 means append to the end
+			idx = len(arr)
+		} else {
+			// Other negative indices not supported for now
+			return ErrArrayIndex
+		}
+	}
+
 	// If we need to expand the array for the set, replace it in the holder container
 	if idx >= len(arr) {
 		if isLast {
@@ -2289,7 +2352,7 @@ func processNumericPathPart(current *interface{}, idx int, isLast bool, parent i
 	if !isLast && next == nil && pathPartIndex+1 < len(pathParts) {
 		nextPart := pathParts[pathPartIndex+1]
 		var newVal interface{}
-		if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+		if strings.Contains(nextPart, "[") || isNumericIndex(nextPart) {
 			newVal = make([]interface{}, 0)
 		} else {
 			newVal = make(map[string]interface{})
@@ -2314,6 +2377,17 @@ func processArrayAccess(current *interface{}, idx int, isLast, isFinalIndex bool
 			*current = arr
 		} else {
 			return ErrTypeMismatch
+		}
+	}
+
+	// Handle negative indices - convert -1 to append position
+	if idx < 0 {
+		if idx == -1 {
+			// -1 means append to the end
+			idx = len(arr)
+		} else {
+			// Other negative indices not supported for now
+			return ErrArrayIndex
 		}
 	}
 
@@ -2343,7 +2417,7 @@ func processArrayAccess(current *interface{}, idx int, isLast, isFinalIndex bool
 	if !isLast && isFinalIndex && pathPartIndex+1 < len(pathParts) {
 		nextPart := pathParts[pathPartIndex+1]
 		if next == nil {
-			if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+			if strings.Contains(nextPart, "[") || isNumericIndex(nextPart) {
 				next = make([]interface{}, 0)
 			} else {
 				next = make(map[string]interface{})
@@ -2440,7 +2514,7 @@ func setInDirectArray(arr []interface{}, index int, value interface{}) []interfa
 // setInInterfacePointer handles *interface{} parent type
 func setInInterfacePointer(p *interface{}, key string, index int, isArray bool, value interface{}) {
 	if isArray {
-		// Ensure it is a slice
+		// Setting an array element - parent could be the array itself or a container holding the array
 		if (*p) == nil {
 			if index < 0 {
 				return
@@ -2450,8 +2524,18 @@ func setInInterfacePointer(p *interface{}, key string, index int, isArray bool, 
 			*p = arr
 			return
 		}
+
+		// Check if parent is the array itself
 		if arr, ok := (*p).([]interface{}); ok {
 			*p = setInDirectArray(arr, index, value)
+			return
+		}
+
+		// Parent is a container (map) holding the array at 'key'
+		if m, ok := (*p).(map[string]interface{}); ok {
+			if arr, arrOk := m[key].([]interface{}); arrOk {
+				m[key] = setInDirectArray(arr, index, value)
+			}
 		}
 		return
 	}
@@ -2642,19 +2726,27 @@ func parseSetPath(path string) ([]setPathSegment, error) {
 	}
 
 	var segments []setPathSegment
-	parts := strings.Split(path, ".")
+	// Use escape-aware splitting
+	parts := splitPath(path)
 
 	for i, part := range parts {
 		if part == "" {
 			continue
 		}
 
+		// Unescape and handle colon prefix
+		unescaped := unescapePath(part)
+		forceObjectKey := hasColonPrefix(unescaped)
+		if forceObjectKey {
+			unescaped = stripColonPrefix(unescaped)
+		}
+
 		// Check if this is the last segment
 		isLast := i == len(parts)-1
 
 		// Handle array access [n]
-		if strings.Contains(part, "[") {
-			base := part[:strings.Index(part, "[")]
+		if strings.Contains(unescaped, "[") {
+			base := unescaped[:strings.Index(unescaped, "[")]
 
 			// Add the base key if it exists
 			if base != "" {
@@ -2666,22 +2758,26 @@ func parseSetPath(path string) ([]setPathSegment, error) {
 			}
 
 			// Process array indexes
-			start := strings.Index(part, "[")
-			for start != -1 && start < len(part) {
-				end := strings.Index(part[start:], "]")
+			start := strings.Index(unescaped, "[")
+			for start != -1 && start < len(unescaped) {
+				end := strings.Index(unescaped[start:], "]")
 				if end == -1 {
 					return nil, ErrInvalidPath
 				}
 				end += start
 
-				// Get array index
-				idx, err := strconv.Atoi(part[start+1 : end])
+				// Get array index (supports negative indices like -1)
+				indexStr := unescaped[start+1 : end]
+				if !isNumericIndex(indexStr) {
+					return nil, ErrInvalidPath
+				}
+				idx, err := strconv.Atoi(indexStr)
 				if err != nil {
 					return nil, ErrInvalidPath
 				}
 
 				// Add the index segment
-				isLastIndex := isLast && end+1 >= len(part)
+				isLastIndex := isLast && end+1 >= len(unescaped)
 				segments = append(segments, setPathSegment{
 					key:   "",
 					index: idx,
@@ -2689,8 +2785,8 @@ func parseSetPath(path string) ([]setPathSegment, error) {
 				})
 
 				// Move to next bracket if any
-				if end+1 < len(part) {
-					start = strings.Index(part[end+1:], "[")
+				if end+1 < len(unescaped) {
+					start = strings.Index(unescaped[end+1:], "[")
 					if start != -1 {
 						start += end + 1
 					}
@@ -2700,11 +2796,12 @@ func parseSetPath(path string) ([]setPathSegment, error) {
 			}
 		} else {
 			// Simple key or numeric index (dot-separated)
-			if isAllDigits(part) {
-				idx, _ := strconv.Atoi(part)
+			// Only treat as numeric if NOT forced as object key
+			if !forceObjectKey && isNumericIndex(unescaped) {
+				idx, _ := strconv.Atoi(unescaped)
 				segments = append(segments, setPathSegment{key: "", index: idx, last: isLast})
 			} else {
-				segments = append(segments, setPathSegment{key: part, index: -1, last: isLast})
+				segments = append(segments, setPathSegment{key: unescaped, index: -1, last: isLast})
 			}
 		}
 	}
@@ -2973,6 +3070,27 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+// isNumericIndex checks if a string is a numeric index (positive or negative)
+// Returns true for "0", "1", "123", "-1", "-2", etc.
+func isNumericIndex(s string) bool {
+	if s == "" {
+		return false
+	}
+	start := 0
+	if s[0] == '-' {
+		if len(s) == 1 {
+			return false // Just "-" is not valid
+		}
+		start = 1
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // parseInt converts a string of digits to an integer
 func parseInt(s string) int {
 	result := 0
@@ -2980,6 +3098,83 @@ func parseInt(s string) int {
 		result = result*10 + int(s[i]-'0')
 	}
 	return result
+}
+
+// unescapePath unescapes special characters in a path segment
+// Supports: \. (literal dot), \: (literal colon), \\ (literal backslash)
+// Example: "fav\.movie" -> "fav.movie"
+func unescapePath(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			next := s[i+1]
+			// Only unescape \. \: and \\
+			if next == '.' || next == ':' || next == '\\' {
+				result.WriteByte(next)
+				i++ // Skip the escaped character
+				continue
+			}
+		}
+		result.WriteByte(s[i])
+	}
+
+	return result.String()
+}
+
+// hasColonPrefix checks if a path segment starts with : to force object key interpretation
+// Example: ":2313" indicates "2313" should be treated as object key, not array index
+func hasColonPrefix(s string) bool {
+	return len(s) > 1 && s[0] == ':'
+}
+
+// stripColonPrefix removes the leading : from a path segment
+func stripColonPrefix(s string) string {
+	if hasColonPrefix(s) {
+		return s[1:]
+	}
+	return s
+}
+
+// splitPath splits a path by dots while respecting escape sequences
+// Example: "fav\.movie.name" -> ["fav.movie", "name"]
+func splitPath(path string) []string {
+	if !strings.Contains(path, "\\") {
+		// Fast path: no escapes, use standard split
+		return strings.Split(path, ".")
+	}
+
+	var parts []string
+	var current strings.Builder
+
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+1 < len(path) {
+			// Escape sequence - include the backslash and next char
+			current.WriteByte(path[i])
+			i++
+			if i < len(path) {
+				current.WriteByte(path[i])
+			}
+		} else if path[i] == '.' {
+			// Unescaped dot - split here
+			parts = append(parts, current.String())
+			current.Reset()
+		} else {
+			current.WriteByte(path[i])
+		}
+	}
+
+	// Add the last part
+	if current.Len() > 0 || len(parts) > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
 }
 
 // tryOptimisticReplace attempts an in-place replacement for simple cases
@@ -3067,7 +3262,8 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 		return nil, false, nil
 	}
 
-	parts := strings.Split(path, ".")
+	// Use escape-aware splitting
+	parts := splitPath(path)
 	if len(parts) < 2 || len(parts) > 4 {
 		return nil, false, nil
 	}
@@ -3083,14 +3279,23 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 	baseOffset := 0
 
 	for _, part := range parts[:len(parts)-1] {
+		// Check for colon prefix before unescaping (determines object vs array access)
+		forceObjKey := hasColonPrefix(part)
+		// Unescape and strip colon prefix
+		unescaped := unescapePath(part)
+		if forceObjKey {
+			unescaped = stripColonPrefix(unescaped)
+		}
+
 		var start, end int
-		if isAllDigits(part) {
+		// Only use array access if NOT forced to object key AND numeric
+		if !forceObjKey && isNumericIndex(unescaped) {
 			// Array access
-			idx, _ := strconv.Atoi(part)
+			idx, _ := strconv.Atoi(unescaped)
 			start, end = getArrayElementRange(window, idx)
 		} else {
 			// Object access
-			start, end = getObjectValueRange(window, part)
+			start, end = getObjectValueRange(window, unescaped)
 		}
 
 		if start < 0 {
@@ -3102,12 +3307,27 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 	}
 
 	// Now set the final key
-	finalKey := parts[len(parts)-1]
+	rawFinalKey := parts[len(parts)-1]
+	// Unescape and strip colon prefix for final key
+	finalKey := unescapePath(rawFinalKey)
+	forceObjectKey := hasColonPrefix(finalKey)
+	if forceObjectKey {
+		finalKey = stripColonPrefix(finalKey)
+	}
+
 	var keyStart, valueStart, valueEnd int
 
-	if isAllDigits(finalKey) {
-		// Array element replacement
+	// Only treat as numeric if NOT forced as object key
+	if !forceObjectKey && isNumericIndex(finalKey) {
+		// Array element replacement or append
 		idx, _ := strconv.Atoi(finalKey)
+
+		// Handle negative indices
+		if idx == -1 {
+			// For -1, we can't use fast path for appending - fall back to full path
+			return nil, false, nil
+		}
+
 		valueStart, valueEnd = getArrayElementRange(window, idx)
 		if valueStart < 0 {
 			return nil, false, nil
@@ -3144,7 +3364,8 @@ func setFastArrayElement(data []byte, path string, value interface{}) ([]byte, b
 		return nil, false, nil
 	}
 
-	parts := strings.Split(path, ".")
+	// Use escape-aware splitting
+	parts := splitPath(path)
 	if len(parts) < 2 {
 		return nil, false, nil
 	}
@@ -3152,7 +3373,12 @@ func setFastArrayElement(data []byte, path string, value interface{}) ([]byte, b
 	// Look for array indices in the path
 	hasArrayIndex := false
 	for _, part := range parts {
-		if isAllDigits(part) && len(part) == 1 && part[0] >= '0' && part[0] <= '9' {
+		// Unescape before checking
+		unescaped := unescapePath(part)
+		if hasColonPrefix(unescaped) {
+			unescaped = stripColonPrefix(unescaped)
+		}
+		if isAllDigits(unescaped) && len(unescaped) == 1 && unescaped[0] >= '0' && unescaped[0] <= '9' {
 			hasArrayIndex = true
 			break
 		}
@@ -3161,7 +3387,6 @@ func setFastArrayElement(data []byte, path string, value interface{}) ([]byte, b
 	if !hasArrayIndex {
 		return nil, false, nil
 	}
-
 	// Use the fast simple dot path handler
 	return setFastSimpleDotPath(data, path, value)
 }
@@ -3255,8 +3480,8 @@ func navigateJsonPath(data *interface{}, path string, options SetOptions) (PathC
 		isArrayElement: false,
 	}
 
-	// Split the path into components
-	pathParts := strings.Split(path, ".")
+	// Split the path into components, respecting escape sequences
+	pathParts := splitPath(path)
 
 	// Navigate through each path part
 	for i, part := range pathParts {
@@ -3278,21 +3503,31 @@ func navigateJsonPath(data *interface{}, path string, options SetOptions) (PathC
 
 // processPathPart processes a single part of a path
 func processPathPart(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string, options SetOptions) error {
+	// Unescape the part (handles \. \: \\)
+	unescaped := unescapePath(part)
+
+	// Check for colon prefix (forces object key interpretation)
+	forceObjectKey := hasColonPrefix(unescaped)
+	if forceObjectKey {
+		unescaped = stripColonPrefix(unescaped)
+	}
+
 	// Handle array access [n]
-	if strings.Contains(part, "[") {
-		err := processArrayNotation(context, part, pathIndex, isLast, pathParts, options)
+	if strings.Contains(unescaped, "[") {
+		err := processArrayNotation(context, unescaped, pathIndex, isLast, pathParts, options)
 		if err != nil {
 			return err
 		}
-	} else if isAllDigits(part) {
-		// Handle numeric segment as array index
-		err := processNumericPart(context, part, pathIndex, isLast, pathParts)
+	} else if !forceObjectKey && isNumericIndex(unescaped) {
+		// Handle numeric segment as array index (including negative like -1)
+		// But NOT if colon prefix was used (which forces object key)
+		err := processNumericPart(context, unescaped, pathIndex, isLast, pathParts)
 		if err != nil {
 			return err
 		}
 	} else {
-		// Regular object key access
-		err := processObjectKeyAccess(context, part, pathIndex, isLast, pathParts)
+		// Regular object key access (including numbers with colon prefix)
+		err := processObjectKeyAccess(context, unescaped, pathIndex, isLast, pathParts)
 		if err != nil {
 			return err
 		}
@@ -3307,16 +3542,25 @@ func processArrayNotation(context *PathContext, part string, pathIndex int, isLa
 
 	// Navigate to the base object first if there is one
 	if base != "" {
-		// Set up parent tracking for processObjectKey
+		// Get the array from the current container
+		m, ok := (*context.current).(map[string]interface{})
+		if !ok {
+			return ErrTypeMismatch
+		}
+
+		arr, exists := m[base]
+		if !exists {
+			// Create array if it doesn't exist
+			arr = make([]interface{}, 0)
+			m[base] = arr
+		}
+
+		// Set up tracking: parent=container, lastKey=base
 		context.parent = context.current
 		context.lastKey = base
-		context.isArrayElement = false
 
-		// Process the object key part
-		err := processObjectKey(context.current, base, isLast, context.parent, context.lastKey, context.lastIndex, context.isArrayElement, nil, options)
-		if err != nil {
-			return err
-		}
+		// Point current to the array for processing brackets
+		context.current = &arr
 	}
 
 	// Process array indexes
@@ -3332,6 +3576,14 @@ func processArrayNotation(context *PathContext, part string, pathIndex int, isLa
 		idx, err := strconv.Atoi(part[start+1 : end])
 		if err != nil {
 			return ErrInvalidPath
+		}
+
+		// Handle negative indices - convert -1 to append position
+		if idx == -1 {
+			// Get the current array to determine its length
+			if arr, ok := (*context.current).([]interface{}); ok {
+				idx = len(arr)
+			}
 		}
 
 		// Process this array access
@@ -3361,9 +3613,17 @@ func processArrayNotation(context *PathContext, part string, pathIndex int, isLa
 	return nil
 }
 
-// processNumericPart handles numeric path parts (e.g., "0", "1", "42")
+// processNumericPart handles numeric path parts (e.g., "0", "1", "42", "-1")
 func processNumericPart(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string) error {
 	idx, _ := strconv.Atoi(part)
+
+	// Handle negative indices - convert -1 to append position
+	if idx == -1 {
+		// Get the current array to determine its length
+		if arr, ok := (*context.current).([]interface{}); ok {
+			idx = len(arr)
+		}
+	}
 
 	// Process a numeric path part (dot notation array access)
 	err := processNumericPathPart(context.current, idx, isLast, context.parent, context.lastKey, pathIndex, pathParts)
@@ -3372,6 +3632,7 @@ func processNumericPart(context *PathContext, part string, pathIndex int, isLast
 	}
 
 	// Update tracking variables
+	// Don't update context.parent - it should remain pointing to the container that holds the array
 	context.lastIndex = idx
 	context.isArrayElement = true
 
@@ -3381,7 +3642,7 @@ func processNumericPart(context *PathContext, part string, pathIndex int, isLast
 // processObjectKeyAccess handles regular object key access
 func processObjectKeyAccess(context *PathContext, part string, pathIndex int, isLast bool, pathParts []string) error {
 	// Array numeric access (dot notation)
-	if arr, ok := (*context.current).([]interface{}); ok && isAllDigits(part) {
+	if arr, ok := (*context.current).([]interface{}); ok && isNumericIndex(part) {
 		return handleDotArrayAccess(context, arr, part, pathIndex, isLast, pathParts)
 	}
 	// Regular object key access
@@ -3393,6 +3654,17 @@ func handleDotArrayAccess(context *PathContext, arr []interface{}, part string, 
 	idx, err := strconv.Atoi(part)
 	if err != nil {
 		return ErrInvalidPath
+	}
+
+	// Handle negative indices - convert -1 to append position
+	if idx < 0 {
+		if idx == -1 {
+			// -1 means append to the end
+			idx = len(arr)
+		} else {
+			// Other negative indices not supported for now
+			return ErrArrayIndex
+		}
 	}
 
 	// Keep parent references pointing to the container
@@ -3420,7 +3692,7 @@ func handleDotArrayAccess(context *PathContext, arr []interface{}, part string, 
 		context.current = &next
 		if pathIndex+1 < len(pathParts) && next == nil {
 			nextPart := pathParts[pathIndex+1]
-			if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
+			if strings.Contains(nextPart, "[") || isNumericIndex(nextPart) {
 				next = make([]interface{}, 0)
 			} else {
 				next = make(map[string]interface{})
@@ -3510,6 +3782,61 @@ func applyMergeOptions(jsonValue interface{}, parent interface{}, lastKey string
 func handleDeletion(json []byte, path string, isArrayElement bool, parent interface{}, lastKey string, lastIndex int) (interface{}, error) {
 	// Special handling for array element deletion
 	if isArrayElement {
+		// Check if path ends with -1 (delete last element)
+		// For deletion, -1 means "last element" not "append position"
+		if strings.HasSuffix(path, ".-1") || strings.HasSuffix(path, "[-1]") {
+			// Get the array to determine actual last index
+			// The array may have been extended with nil during navigation, so we need to:
+			// 1. Get the array
+			// 2. Find the last non-nil element (or use len-1 if no nils)
+			// 3. Remove the trailing nil (if any) and then the last real element
+
+			var arr []interface{}
+			var parentMap map[string]interface{}
+
+			// Extract array from parent
+			switch p := parent.(type) {
+			case []interface{}:
+				arr = p
+			case *interface{}:
+				if m, ok := (*p).(map[string]interface{}); ok {
+					parentMap = m
+					if a, ok := m[lastKey].([]interface{}); ok {
+						arr = a
+					}
+				} else if a, ok := (*p).([]interface{}); ok {
+					arr = a
+				}
+			case map[string]interface{}:
+				parentMap = p
+				if a, ok := p[lastKey].([]interface{}); ok {
+					arr = a
+				}
+			}
+
+			if arr != nil && len(arr) > 0 {
+				// Check if the last element is nil (added during navigation for append)
+				// If so, we need to remove it first, then delete the actual last element
+				actualLen := len(arr)
+				if arr[actualLen-1] == nil {
+					actualLen-- // Don't count the nil placeholder
+				}
+
+				if actualLen > 0 {
+					// Delete the last real element
+					lastIndex = actualLen - 1
+					newArr := make([]interface{}, lastIndex)
+					copy(newArr, arr[:lastIndex])
+
+					// Update the parent's reference
+					if parentMap != nil {
+						parentMap[lastKey] = newArr
+					}
+
+					return nil, nil
+				}
+			}
+		}
 		return handleArrayDeletion(json, path, parent, lastKey, lastIndex)
 	}
 
@@ -3554,13 +3881,20 @@ func handleDirectArrayDeletion(json []byte, path string, arr []interface{}, last
 	}
 
 	// Navigate the path to find the container and replace the array
-	pathParts := strings.Split(path, ".")
+	// Use escape-aware splitting
+	pathParts := splitPath(path)
 	current := &data
 	for i, part := range pathParts[:len(pathParts)-1] { // all parts except the last (which is the index)
+		// Unescape and handle colon prefix
+		unescaped := unescapePath(part)
+		if hasColonPrefix(unescaped) {
+			unescaped = stripColonPrefix(unescaped)
+		}
+
 		if m, ok := (*current).(map[string]interface{}); ok {
-			if val, exists := m[part]; exists {
+			if val, exists := m[unescaped]; exists {
 				if i == len(pathParts)-2 { // this is the parent of the array
-					m[part] = newArr // replace the array
+					m[unescaped] = newArr // replace the array
 					break
 				}
 				current = &val
@@ -3623,7 +3957,9 @@ func setSimplePath(json []byte, path string, value interface{}, options SetOptio
 	parent := pathContext.parent
 	lastKey := pathContext.lastKey
 	lastIndex := pathContext.lastIndex
-	isArrayElement := pathContext.isArrayElement // Handle deletion
+	isArrayElement := pathContext.isArrayElement
+
+	// Handle deletion
 	if value == deletionMarkerValue {
 		// Handle deletion based on the element type
 		result, err := handleDeletion(json, path, isArrayElement, parent, lastKey, lastIndex)

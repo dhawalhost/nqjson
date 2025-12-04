@@ -487,20 +487,78 @@ fmt.Printf("Type: %s\n", result.Type.String()) // "String"
 - `items.-1` - Last element of the array (for SET operations, appends)
 
 ### Complex Expressions
-- `items.#` - Get all elements of array
+- `items.#` - Array length (count of elements)
 - `items.#.name` - Get the `name` field from all array elements
-- `items.#(price>10)` - Filter array elements where price > 10
-- `items.#(name="Alice")` - Filter elements where name equals "Alice"
-- `items.#(tags.#(#=="urgent"))` - Complex nested filtering
+- `items.#(price>10)` - First element where price > 10
+- `items.#(price>10)#` - All elements where price > 10
+- `items.#(name=="Alice")` - First element where name equals "Alice"
+- `items.#(name%"A*")#` - All elements where name matches pattern "A*"
+- `items.#(tags.#(=="urgent"))` - Complex nested filtering
 
 ### Wildcard Matching
 - `*.name` - Get `name` from all top-level objects
 - `user.*.email` - Get `email` from all fields under `user`
+- `child*.first` - Match keys starting with "child" (e.g., children, child1)
+- `item?.value` - Match single character wildcard (e.g., item1, itemA)
 
 ### Modifiers
-- `@reverse` - Reverse array order
-- `@sort` - Sort array elements
-- `@group` - Group array elements
+
+Use the pipe `|` syntax to apply modifiers to results:
+
+#### Array Transformation Modifiers
+- `items|@reverse` - Reverse array order
+- `items|@sort` - Sort array ascending
+- `items|@flatten` - Flatten nested arrays
+- `items|@distinct` or `items|@unique` - Remove duplicates
+- `items|@first` - Get first element
+- `items|@last` - Get last element
+
+#### Object Modifiers
+- `user|@keys` - Get object keys as array
+- `user|@values` - Get object values as array
+
+#### Aggregate Modifiers (for numeric arrays)
+- `prices|@sum` - Sum of all values
+- `prices|@avg` or `@average` or `@mean` - Average of values
+- `prices|@min` - Minimum value
+- `prices|@max` - Maximum value
+- `items|@count` or `@length` or `@len` - Count of elements
+
+#### Format Modifiers
+- `@this` - Return current value unchanged
+- `@valid` - Validate JSON (returns if valid, empty if invalid)
+- `@pretty` - Pretty print JSON with 2-space indent
+- `@pretty:{"indent":"\t"}` - Pretty print with custom indent
+- `@ugly` - Minify JSON (remove whitespace)
+
+#### Type Conversion Modifiers
+- `value|@string` or `@str` - Convert to string
+- `value|@number` or `@num` - Convert to number
+- `value|@bool` or `@boolean` - Convert to boolean
+- `value|@base64` - Base64 encode
+- `value|@base64decode` - Base64 decode
+- `value|@lower` - Convert string to lowercase
+- `value|@upper` - Convert string to uppercase
+- `value|@type` - Get JSON type as string
+- `tags|@join` or `@join:","` - Join array elements to string
+
+#### Modifier Chaining
+- `items|@sort|@reverse` - Sort descending (sort then reverse)
+- `children|@reverse|0` - First element of reversed array
+- `tags|@distinct|@sort` - Unique sorted values
+- `nested|@flatten|@sum` - Flatten then sum
+
+### Escape Sequences
+- `fav\.movie` - Access key with literal dot: `{"fav.movie": "value"}`
+- `user\:name` - Access key with literal colon: `{"user:name": "value"}`
+- `:123` - Access numeric string as object key (not array index)
+- `users.:456.name` - Nested numeric object keys
+
+### JSON Lines Support
+- `..#` - Count of JSON lines
+- `..0` - First JSON line
+- `..1` - Second JSON line
+- `..#.name` - Get `name` from all JSON lines
 
 ## Performance Notes
 

@@ -1,6 +1,7 @@
 package nqjson
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -6364,7 +6365,7 @@ func TestAdvancedFeaturesCoverage(t *testing.T) {
 			{
 				name:     "multi_path_pipe",
 				json:     `{"x":10,"y":20}`,
-				path:     "x|y",
+				path:     "x,y", // Use comma for multipath (gjson syntax)
 				expected: true,
 			},
 			{
@@ -8965,4 +8966,1250 @@ func TestMultiPathAndJSONLines(t *testing.T) {
 			t.Logf("JSON Lines all names: %s", result.String())
 		}
 	})
+}
+
+// =============================================================================
+// FORMAT TESTS (from format_test.go)
+// =============================================================================
+
+// Test data for formatting operations
+var (
+	formatUglyJSON = []byte(`{"name":"John","age":30,"address":{"street":"123 Main St","city":"New York"},"phones":[{"type":"home","number":"555-1234"},{"type":"work","number":"555-5678"}],"active":true,"scores":[95,87,92]}`)
+
+	formatPrettyJSON = []byte(`{
+  "name": "John",
+  "age": 30,
+  "address": {
+    "street": "123 Main St",
+    "city": "New York"
+  },
+  "phones": [
+    {
+      "type": "home",
+      "number": "555-1234"
+    },
+    {
+      "type": "work",
+      "number": "555-5678"
+    }
+  ],
+  "active": true,
+  "scores": [
+    95,
+    87,
+    92
+  ]
+}`)
+
+	formatComplexJSON = []byte(`{"users":[{"id":1,"profile":{"name":"Alice","settings":{"theme":"dark","notifications":true}}},{"id":2,"profile":{"name":"Bob","settings":{"theme":"light","notifications":false}}}],"metadata":{"count":2,"generated":"2025-09-03"}}`)
+
+	formatEmptyObjects = []byte(`{"empty":{},"emptyArray":[],"nested":{"inner":{}}}`)
+
+	formatStringWithEscapes = []byte(`{"message":"Hello \"world\"\nNew line\tTab","unicode":"Unicode: \u0048\u0065\u006C\u006C\u006F"}`)
+
+	formatNumbers = []byte(`{"integer":42,"negative":-123,"decimal":3.14159,"scientific":1.23e10,"negativeScientific":-4.56E-7}`)
+
+	formatLiterals = []byte(`{"truth":true,"falsehood":false,"nothing":null}`)
+)
+
+func TestFormat_Pretty_BasicFormatting(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{
+			name:  "Simple Object",
+			input: []byte(`{"name":"John","age":30}`),
+			expected: `{
+  "name": "John",
+  "age": 30
+}`,
+		},
+		{
+			name:  "Simple Array",
+			input: []byte(`[1,2,3]`),
+			expected: `[
+  1,
+  2,
+  3
+]`,
+		},
+		{
+			name:     "Empty Object",
+			input:    []byte(`{}`),
+			expected: `{}`,
+		},
+		{
+			name:     "Empty Array",
+			input:    []byte(`[]`),
+			expected: `[]`,
+		},
+		{
+			name:     "Nested Structure",
+			input:    formatUglyJSON,
+			expected: string(formatPrettyJSON),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Pretty(tt.input)
+			if err != nil {
+				t.Fatalf("Pretty() failed: %v", err)
+			}
+
+			if string(result) != tt.expected {
+				t.Errorf("Pretty() = %q, want %q", string(result), tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormat_Pretty_CustomIndentation(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []byte
+		indent string
+		want   string
+	}{
+		{
+			name:   "Tab Indentation",
+			input:  []byte(`{"a":1,"b":2}`),
+			indent: "\t",
+			want:   "{\n\t\"a\": 1,\n\t\"b\": 2\n}",
+		},
+		{
+			name:   "Four Space Indentation",
+			input:  []byte(`{"a":1,"b":2}`),
+			indent: "    ",
+			want:   "{\n    \"a\": 1,\n    \"b\": 2\n}",
+		},
+		{
+			name:   "No Indentation (Uglify)",
+			input:  []byte(`{"a": 1, "b": 2}`),
+			indent: "",
+			want:   `{"a":1,"b":2}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &FormatOptions{Indent: tt.indent}
+			result, err := PrettyWithOptions(tt.input, opts)
+			if err != nil {
+				t.Fatalf("PrettyWithOptions() failed: %v", err)
+			}
+
+			if string(result) != tt.want {
+				t.Errorf("PrettyWithOptions() = %q, want %q", string(result), tt.want)
+			}
+		})
+	}
+}
+
+func TestFormat_Pretty_ComplexStructures(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{name: "Complex Nested JSON", input: formatComplexJSON},
+		{name: "Empty Objects and Arrays", input: formatEmptyObjects},
+		{name: "Strings with Escapes", input: formatStringWithEscapes},
+		{name: "Various Number Formats", input: formatNumbers},
+		{name: "Boolean and Null Literals", input: formatLiterals},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Pretty(tt.input)
+			if err != nil {
+				t.Fatalf("Pretty() failed: %v", err)
+			}
+
+			uglified, err := Ugly(result)
+			if err != nil {
+				t.Fatalf("Failed to uglify prettified JSON: %v", err)
+			}
+
+			originalUglified, err := Ugly(tt.input)
+			if err != nil {
+				t.Fatalf("Failed to uglify original JSON: %v", err)
+			}
+
+			if !bytes.Equal(uglified, originalUglified) {
+				t.Errorf("Prettify->Uglify cycle changed content:\nOriginal: %s\nResult:   %s", originalUglified, uglified)
+			}
+		})
+	}
+}
+
+func TestFormat_Ugly_BasicMinification(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		expected []byte
+	}{
+		{
+			name:     "Remove Spaces",
+			input:    []byte(`{ "name" : "John" , "age" : 30 }`),
+			expected: []byte(`{"name":"John","age":30}`),
+		},
+		{
+			name:     "Remove Newlines and Tabs",
+			input:    []byte("{\n\t\"name\": \"John\",\n\t\"age\": 30\n}"),
+			expected: []byte(`{"name":"John","age":30}`),
+		},
+		{
+			name:     "Preserve String Content",
+			input:    []byte(`{"message": "Hello world\nWith newlines\tand tabs"}`),
+			expected: []byte(`{"message":"Hello world\nWith newlines\tand tabs"}`),
+		},
+		{
+			name:     "Array Minification",
+			input:    []byte(`[ 1 , 2 , 3 , 4 ]`),
+			expected: []byte(`[1,2,3,4]`),
+		},
+		{
+			name:     "Complex Nested Structure",
+			input:    formatPrettyJSON,
+			expected: formatUglyJSON,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Ugly(tt.input)
+			if err != nil {
+				t.Fatalf("Ugly() failed: %v", err)
+			}
+
+			if !bytes.Equal(result, tt.expected) {
+				t.Errorf("Ugly() = %q, want %q", string(result), string(tt.expected))
+			}
+		})
+	}
+}
+
+func TestFormat_Ugly_PreservesStringEscapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{name: "Escaped Quotes", input: []byte(`{ "message" : "He said \"Hello\"" }`)},
+		{name: "Escaped Backslashes", input: []byte(`{ "path" : "C:\\Users\\Documents" }`)},
+		{name: "Unicode Escapes", input: []byte(`{ "unicode" : "\\u0048\\u0065\\u006C\\u006C\\u006F" }`)},
+		{name: "Mixed Escapes", input: formatStringWithEscapes},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Ugly(tt.input)
+			if err != nil {
+				t.Fatalf("Ugly() failed: %v", err)
+			}
+
+			prettified, err := Pretty(result)
+			if err != nil {
+				t.Fatalf("Failed to prettify uglified JSON: %v", err)
+			}
+
+			roundTrip, err := Ugly(prettified)
+			if err != nil {
+				t.Fatalf("Failed to uglify round-trip JSON: %v", err)
+			}
+
+			if !bytes.Equal(result, roundTrip) {
+				t.Errorf("Ugly->Pretty->Ugly cycle changed content:\nFirst:  %s\nSecond: %s", result, roundTrip)
+			}
+		})
+	}
+}
+
+func TestFormat_Valid_CorrectJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+		want  bool
+	}{
+		{name: "Simple Object", input: []byte(`{"name":"John"}`), want: true},
+		{name: "Simple Array", input: []byte(`[1,2,3]`), want: true},
+		{name: "String Value", input: []byte(`"hello"`), want: true},
+		{name: "Number Value", input: []byte(`42`), want: true},
+		{name: "Boolean True", input: []byte(`true`), want: true},
+		{name: "Boolean False", input: []byte(`false`), want: true},
+		{name: "Null Value", input: []byte(`null`), want: true},
+		{name: "Complex Nested", input: formatComplexJSON, want: true},
+		{name: "Empty Object", input: []byte(`{}`), want: true},
+		{name: "Empty Array", input: []byte(`[]`), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Valid(tt.input)
+			if result != tt.want {
+				t.Errorf("Valid() = %v, want %v for input: %s", result, tt.want, string(tt.input))
+			}
+		})
+	}
+}
+
+func TestFormat_Valid_InvalidJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+		want  bool
+	}{
+		{name: "Empty Input", input: []byte(``), want: false},
+		{name: "Unclosed Object", input: []byte(`{"name":"John"`), want: false},
+		{name: "Unclosed Array", input: []byte(`[1,2,3`), want: false},
+		{name: "Unterminated String", input: []byte(`{"name":"John`), want: false},
+		{name: "Invalid Number", input: []byte(`{"age":3.}`), want: false},
+		{name: "Missing Colon", input: []byte(`{"name""John"}`), want: false},
+		{name: "Trailing Comma Object", input: []byte(`{"name":"John",}`), want: false},
+		{name: "Trailing Comma Array", input: []byte(`[1,2,3,]`), want: false},
+		{name: "Invalid Literal", input: []byte(`{"value":truee}`), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Valid(tt.input)
+			if result != tt.want {
+				t.Errorf("Valid() = %v, want %v for input: %s", result, tt.want, string(tt.input))
+			}
+		})
+	}
+}
+
+func TestFormat_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{name: "Deeply Nested Object", input: formatGenerateDeeplyNested(20)},
+		{name: "Large Array", input: []byte(`[` + strings.Repeat(`"item",`, 999) + `"item"]`)},
+		{name: "Many Keys Object", input: formatGenerateManyKeysObject(100)},
+		{name: "Long String Values", input: []byte(`{"long":"` + strings.Repeat("a", 10000) + `"}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pretty, err := Pretty(tt.input)
+			if err != nil {
+				t.Fatalf("Pretty() failed: %v", err)
+			}
+
+			ugly, err := Ugly(pretty)
+			if err != nil {
+				t.Fatalf("Ugly() failed: %v", err)
+			}
+
+			originalUgly, err := Ugly(tt.input)
+			if err != nil {
+				t.Fatalf("Failed to uglify original: %v", err)
+			}
+
+			if !bytes.Equal(ugly, originalUgly) {
+				t.Error("Round-trip formatting changed content")
+			}
+		})
+	}
+}
+
+func formatGenerateDeeplyNested(depth int) []byte {
+	var buf bytes.Buffer
+	for i := 0; i < depth; i++ {
+		buf.WriteString(`{"level`)
+		buf.WriteString(string(rune(i + '0')))
+		buf.WriteString(`":`)
+	}
+	buf.WriteString(`"value"`)
+	for i := 0; i < depth; i++ {
+		buf.WriteByte('}')
+	}
+	return buf.Bytes()
+}
+
+func formatGenerateManyKeysObject(keyCount int) []byte {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i := 0; i < keyCount; i++ {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(`"key`)
+		buf.WriteString(string(rune(i + '0')))
+		buf.WriteString(`":"value`)
+		buf.WriteString(string(rune(i + '0')))
+		buf.WriteByte('"')
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
+}
+
+// =============================================================================
+// ESCAPE AND COLON PREFIX TESTS - GET OPERATIONS (from escape_colon_test.go)
+// =============================================================================
+
+func TestEscapeSequences_Get(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "escaped_dot_in_key_get",
+			json:     `{"fav.movie":"Inception"}`,
+			path:     `fav\.movie`,
+			expected: `"Inception"`,
+		},
+		{
+			name:     "escaped_colon_in_key_get",
+			json:     `{"user:name":"John"}`,
+			path:     `user\:name`,
+			expected: `"John"`,
+		},
+		{
+			name:     "escaped_backslash_in_key_get",
+			json:     `{"path\\to\\file":"readme.txt"}`,
+			path:     `path\\to\\file`,
+			expected: `"readme.txt"`,
+		},
+		{
+			name:     "multiple_escapes_in_path_get",
+			json:     `{"a.b":{"c:d":"value1"}}`,
+			path:     `a\.b.c\:d`,
+			expected: `"value1"`,
+		},
+		{
+			name:     "nested_path_with_escapes_get",
+			json:     `{"user":{"first.name":"John","last:name":"Doe"}}`,
+			path:     `user.last\:name`,
+			expected: `"Doe"`,
+		},
+		{
+			name:     "array_with_escaped_key_get",
+			json:     `{"items":[{"id.value":1},{"id.value":2}]}`,
+			path:     `items.1.id\.value`,
+			expected: `2`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+			if !result.Exists() {
+				t.Errorf("Expected value to exist at path %q", tt.path)
+				return
+			}
+			got := string(result.Raw)
+			if got != tt.expected {
+				t.Errorf("Get(%q) = %q, want %q", tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestColonPrefix_Get(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "numeric_key_with_colon_get",
+			json:     `{"users":{"2313":{"name":"Alice"}}}`,
+			path:     `users.:2313.name`,
+			expected: `"Alice"`,
+		},
+		{
+			name:     "numeric_key_without_colon_array_access_get",
+			json:     `{"items":[10,20,30]}`,
+			path:     `items.1`,
+			expected: `20`,
+		},
+		{
+			name:     "mixed_colon_and_regular_path_get",
+			json:     `{"root":{"456":{"nested":"value"}}}`,
+			path:     `root.:456.nested`,
+			expected: `"value"`,
+		},
+		{
+			name:     "multiple_numeric_keys_with_colon_get",
+			json:     `{"a":{"123":{"456":"test"}}}`,
+			path:     `a.:123.:456`,
+			expected: `"test"`,
+		},
+		{
+			name:     "zero_as_object_key_with_colon",
+			json:     `{"items":{"0":"zero key"}}`,
+			path:     `items.:0`,
+			expected: `"zero key"`,
+		},
+		{
+			name:     "large_numeric_key_with_colon",
+			json:     `{"data":{"999999":"large"}}`,
+			path:     `data.:999999`,
+			expected: `"large"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+			if !result.Exists() {
+				t.Errorf("Expected value to exist at path %q", tt.path)
+				return
+			}
+			got := string(result.Raw)
+			if got != tt.expected {
+				t.Errorf("Get(%q) = %q, want %q", tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCombinedEscapeAndColon_Get(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "escaped_dot_and_colon_prefix_get",
+			json:     `{"user.data":{"123":"value"}}`,
+			path:     `user\.data.:123`,
+			expected: `"value"`,
+		},
+		{
+			name:     "complex_path_with_both_features_get",
+			json:     `{"app:config":{"server.address":{"8080":"localhost"}}}`,
+			path:     `app\:config.server\.address.:8080`,
+			expected: `"localhost"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+			if !result.Exists() {
+				t.Errorf("Expected value to exist at path %q", tt.path)
+				return
+			}
+			got := string(result.Raw)
+			if got != tt.expected {
+				t.Errorf("Get(%q) = %q, want %q", tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHelperFunctions_Get(t *testing.T) {
+	t.Run("unescapePath", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected string
+		}{
+			{`fav\.movie`, `fav.movie`},
+			{`user\:name`, `user:name`},
+			{`path\\to\\file`, `path\to\file`},
+			{`no_escapes`, `no_escapes`},
+			{`mixed\.escape\:here\\`, `mixed.escape:here\`},
+			{`\\\.`, `\.`},
+		}
+
+		for _, tt := range tests {
+			got := unescapePath(tt.input)
+			if got != tt.expected {
+				t.Errorf("unescapePath(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		}
+	})
+
+	t.Run("hasColonPrefix", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected bool
+		}{
+			{`:123`, true},
+			{`:0`, true},
+			{`:999`, true},
+			{`123`, false},
+			{`name`, false},
+			{``, false},
+			{`:`, false},
+		}
+
+		for _, tt := range tests {
+			got := hasColonPrefix(tt.input)
+			if got != tt.expected {
+				t.Errorf("hasColonPrefix(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		}
+	})
+
+	t.Run("stripColonPrefix", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected string
+		}{
+			{`:123`, `123`},
+			{`:0`, `0`},
+			{`:abc`, `abc`},
+			{`123`, `123`},
+			{`name`, `name`},
+		}
+
+		for _, tt := range tests {
+			got := stripColonPrefix(tt.input)
+			if got != tt.expected {
+				t.Errorf("stripColonPrefix(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		}
+	})
+
+	t.Run("splitPath", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected []string
+		}{
+			{`a.b.c`, []string{`a`, `b`, `c`}},
+			{`a\.b.c`, []string{`a\.b`, `c`}},
+			{`user\.name.age`, []string{`user\.name`, `age`}},
+			{`a\:b.c\:d.e`, []string{`a\:b`, `c\:d`, `e`}},
+			{`path\\to\\file`, []string{`path\\to\\file`}},
+			{`a.b\.c.d`, []string{`a`, `b\.c`, `d`}},
+		}
+
+		for _, tt := range tests {
+			got := splitPath(tt.input)
+			if len(got) != len(tt.expected) {
+				t.Errorf("splitPath(%q) returned %d parts, want %d", tt.input, len(got), len(tt.expected))
+				continue
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Errorf("splitPath(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.expected[i])
+				}
+			}
+		}
+	})
+}
+
+// =============================================================================
+// PATH SYNTAX TESTS (from verify_compat_test.go)
+// =============================================================================
+
+var pathSyntaxTestJSON = `{
+  "name": {"first": "Tom", "last": "Anderson"},
+  "age":37,
+  "children": ["Sara","Alex","Jack"],
+  "fav.movie": "Deer Hunter",
+  "friends": [
+    {"first": "Dale", "last": "Murphy", "age": 44, "nets": ["ig", "fb", "tw"]},
+    {"first": "Roger", "last": "Craig", "age": 68, "nets": ["fb", "tw"]},
+    {"first": "Jane", "last": "Murphy", "age": 47, "nets": ["ig", "tw"]}
+  ]
+}`
+
+func TestPathSyntax_BasicAccess(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+		desc     string
+	}{
+		{"name.last", "Anderson", "nested object access"},
+		{"age", "37", "top-level number"},
+		{"children.1", "Alex", "array index access"},
+		{"friends.1.last", "Craig", "nested array object access"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			result := Get([]byte(pathSyntaxTestJSON), tc.path)
+			if result.String() != tc.expected {
+				t.Errorf("Get(%q) = %q, want %q", tc.path, result.String(), tc.expected)
+			}
+		})
+	}
+}
+
+func TestPathSyntax_ArrayLength(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "children.#")
+	if result.Int() != 3 {
+		t.Errorf("children.# = %d, want 3", result.Int())
+	}
+}
+
+func TestPathSyntax_WildcardStar(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "child*.2")
+	if result.String() != "Jack" {
+		t.Errorf("child*.2 = %q, want Jack", result.String())
+	}
+}
+
+func TestPathSyntax_WildcardQuestion(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "c?ildren.0")
+	if result.String() != "Sara" {
+		t.Errorf("c?ildren.0 = %q, want Sara", result.String())
+	}
+}
+
+func TestPathSyntax_EscapedDot(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `fav\.movie`)
+	if result.String() != "Deer Hunter" {
+		t.Errorf(`fav\.movie = %q, want "Deer Hunter"`, result.String())
+	}
+}
+
+func TestPathSyntax_ArrayWildcard(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "friends.#.first")
+	arr := result.Array()
+	if len(arr) != 3 {
+		t.Errorf("friends.#.first length = %d, want 3", len(arr))
+	}
+}
+
+func TestPathSyntax_QueryFirstMatch(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `friends.#(last=="Murphy").first`)
+	if result.String() != "Dale" {
+		t.Errorf(`friends.#(last=="Murphy").first = %q, want Dale`, result.String())
+	}
+}
+
+func TestPathSyntax_QueryAllMatches(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `friends.#(last=="Murphy")#.first`)
+	arr := result.Array()
+	if len(arr) != 2 {
+		t.Errorf(`friends.#(last=="Murphy")#.first length = %d, want 2`, len(arr))
+	}
+}
+
+func TestPathSyntax_QueryComparison(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `friends.#(age>45)#.last`)
+	arr := result.Array()
+	if len(arr) != 2 {
+		t.Errorf(`friends.#(age>45)#.last length = %d, want 2`, len(arr))
+	}
+}
+
+func TestPathSyntax_QueryPattern(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `friends.#(first%"D*").last`)
+	if result.String() != "Murphy" {
+		t.Errorf(`friends.#(first%%"D*").last = %q, want Murphy`, result.String())
+	}
+}
+
+func TestPathSyntax_QueryPatternNot(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `friends.#(first!%"D*").last`)
+	if result.String() != "Craig" {
+		t.Errorf(`friends.#(first!%%"D*").last = %q, want Craig`, result.String())
+	}
+}
+
+func TestPathSyntax_NestedQuery(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), `friends.#(nets.#(=="fb"))#.first`)
+	arr := result.Array()
+	if len(arr) != 2 {
+		t.Errorf(`friends.#(nets.#(=="fb"))#.first length = %d, want 2`, len(arr))
+	}
+}
+
+func TestPathSyntax_ModifierReverse(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "children|@reverse")
+	arr := result.Array()
+	if len(arr) != 3 || arr[0].String() != "Jack" {
+		t.Errorf("children|@reverse = %v, want [Jack,Alex,Sara]", arr)
+	}
+}
+
+func TestPathSyntax_ModifierChain(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "children|@reverse|0")
+	if result.String() != "Jack" {
+		t.Errorf("children|@reverse|0 = %q, want Jack", result.String())
+	}
+}
+
+func TestPathSyntax_ModifierKeys(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "name|@keys")
+	arr := result.Array()
+	if len(arr) != 2 {
+		t.Errorf("name|@keys length = %d, want 2", len(arr))
+	}
+}
+
+func TestPathSyntax_ModifierValues(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "name|@values")
+	arr := result.Array()
+	if len(arr) != 2 {
+		t.Errorf("name|@values length = %d, want 2", len(arr))
+	}
+}
+
+func TestPathSyntax_ModifierFlatten(t *testing.T) {
+	json := `{"a":[[1,2],[3,4]]}`
+	result := Get([]byte(json), "a|@flatten")
+	arr := result.Array()
+	if len(arr) != 4 {
+		t.Errorf("a|@flatten length = %d, want 4", len(arr))
+	}
+}
+
+func TestPathSyntax_ModifierThis(t *testing.T) {
+	result := Get([]byte(`{"a":1}`), "@this")
+	if !result.Exists() {
+		t.Errorf("@this should return root element")
+	}
+}
+
+func TestPathSyntax_ModifierValid(t *testing.T) {
+	result := Get([]byte(`{"a":1}`), "@valid")
+	if !result.Exists() {
+		t.Errorf("@valid should validate JSON")
+	}
+}
+
+func TestPathSyntax_ModifierPretty(t *testing.T) {
+	result := Get([]byte(`{"a":1}`), "@pretty")
+	if !result.Exists() {
+		t.Errorf("@pretty should format JSON")
+	}
+}
+
+func TestPathSyntax_ModifierUgly(t *testing.T) {
+	result := Get([]byte(`{ "a" : 1 }`), "@ugly")
+	if string(result.Raw) != `{"a":1}` {
+		t.Errorf("@ugly = %q, want {\"a\":1}", string(result.Raw))
+	}
+}
+
+func TestPathSyntax_JSONLines(t *testing.T) {
+	jsonLines := `{"name": "Gilbert", "age": 61}
+{"name": "Alexa", "age": 34}
+{"name": "May", "age": 57}
+{"name": "Deloise", "age": 44}`
+
+	result := Get([]byte(jsonLines), "..#")
+	if result.Int() != 4 {
+		t.Errorf("..# = %d, want 4", result.Int())
+	}
+
+	result = Get([]byte(jsonLines), "..1")
+	name := Get([]byte(result.Raw), "name")
+	if name.String() != "Alexa" {
+		t.Errorf("..1.name = %q, want Alexa", name.String())
+	}
+
+	result = Get([]byte(jsonLines), "..#.name")
+	arr := result.Array()
+	if len(arr) != 4 {
+		t.Errorf("..#.name length = %d, want 4", len(arr))
+	}
+}
+
+func TestPathSyntax_ResultMethods(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "age")
+	if result.Type != TypeNumber {
+		t.Errorf("age type = %v, want Number", result.Type)
+	}
+	if !result.Exists() {
+		t.Error("age should exist")
+	}
+	if result.Int() != 37 {
+		t.Errorf("age.Int() = %d, want 37", result.Int())
+	}
+	if result.Float() != 37.0 {
+		t.Errorf("age.Float() = %f, want 37.0", result.Float())
+	}
+	if result.String() != "37" {
+		t.Errorf("age.String() = %q, want 37", result.String())
+	}
+
+	result = Get([]byte(`{"flag":true}`), "flag")
+	if !result.Bool() {
+		t.Error("flag.Bool() should be true")
+	}
+
+	result = Get([]byte(pathSyntaxTestJSON), "children")
+	arr := result.Array()
+	if len(arr) != 3 {
+		t.Errorf("children.Array() length = %d, want 3", len(arr))
+	}
+
+	result = Get([]byte(pathSyntaxTestJSON), "name")
+	m := result.Map()
+	if len(m) != 2 {
+		t.Errorf("name.Map() length = %d, want 2", len(m))
+	}
+}
+
+func TestPathSyntax_ResultGet(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "name")
+	last := result.Get("last")
+	if last.String() != "Anderson" {
+		t.Errorf("name.Get(last) = %q, want Anderson", last.String())
+	}
+}
+
+func TestPathSyntax_ForEach(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "children")
+	count := 0
+	result.ForEach(func(key, value Result) bool {
+		count++
+		return true
+	})
+	if count != 3 {
+		t.Errorf("ForEach count = %d, want 3", count)
+	}
+}
+
+func TestPathSyntax_Multipath(t *testing.T) {
+	result := Get([]byte(pathSyntaxTestJSON), "name.first,name.last")
+	arr := result.Array()
+	if len(arr) != 2 {
+		t.Errorf("multipath length = %d, want 2", len(arr))
+	}
+}
+
+// =============================================================================
+// CHAIN DEBUG TESTS (from chain_test.go)
+// =============================================================================
+
+func TestChain_ModifierWithPath(t *testing.T) {
+	json := []byte(`{"children":["Sara","Alex","Jack"]}`)
+
+	r1 := Get(json, "children")
+	if r1.Type != TypeArray {
+		t.Errorf("children should be array, got %v", r1.Type)
+	}
+
+	r2 := Get(json, "children|@reverse")
+	arr := r2.Array()
+	if len(arr) != 3 || arr[0].String() != "Jack" {
+		t.Errorf("children|@reverse should be [Jack,Alex,Sara], got %v", arr)
+	}
+
+	r3 := Get(json, "children|@reverse|0")
+	if r3.String() != "Jack" {
+		t.Errorf("children|@reverse|0 should be Jack, got %q", r3.String())
+	}
+}
+
+// =============================================================================
+// VALUE() METHOD TESTS
+// =============================================================================
+
+func TestResult_Value(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		wantType string
+	}{
+		{
+			name:     "string_value",
+			json:     `{"name":"Alice"}`,
+			path:     "name",
+			wantType: "string",
+		},
+		{
+			name:     "number_value",
+			json:     `{"age":30}`,
+			path:     "age",
+			wantType: "float64",
+		},
+		{
+			name:     "bool_true_value",
+			json:     `{"active":true}`,
+			path:     "active",
+			wantType: "bool",
+		},
+		{
+			name:     "bool_false_value",
+			json:     `{"active":false}`,
+			path:     "active",
+			wantType: "bool",
+		},
+		{
+			name:     "null_value",
+			json:     `{"data":null}`,
+			path:     "data",
+			wantType: "nil",
+		},
+		{
+			name:     "array_value",
+			json:     `{"items":[1,2,3]}`,
+			path:     "items",
+			wantType: "[]interface {}",
+		},
+		{
+			name:     "object_value",
+			json:     `{"user":{"name":"Bob","age":25}}`,
+			path:     "user",
+			wantType: "map[string]interface {}",
+		},
+		{
+			name:     "non_existent",
+			json:     `{"name":"Alice"}`,
+			path:     "missing",
+			wantType: "nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+			val := result.Value()
+
+			var gotType string
+			if val == nil {
+				gotType = "nil"
+			} else {
+				gotType = fmt.Sprintf("%T", val)
+			}
+
+			if gotType != tt.wantType {
+				t.Errorf("Value() type = %s, want %s", gotType, tt.wantType)
+			}
+		})
+	}
+}
+
+func TestResult_Value_DeepConversion(t *testing.T) {
+	json := `{
+		"user": {
+			"name": "Alice",
+			"age": 30,
+			"active": true,
+			"tags": ["admin", "verified"],
+			"profile": {
+				"bio": "Developer",
+				"level": 5
+			}
+		}
+	}`
+
+	result := Get([]byte(json), "user")
+	val := result.Value()
+
+	// Check it's a map
+	m, ok := val.(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected map[string]interface{}, got %T", val)
+	}
+
+	// Check string field
+	if name, ok := m["name"].(string); !ok || name != "Alice" {
+		t.Errorf("name = %v, want Alice", m["name"])
+	}
+
+	// Check number field
+	if age, ok := m["age"].(float64); !ok || age != 30 {
+		t.Errorf("age = %v, want 30", m["age"])
+	}
+
+	// Check boolean field
+	if active, ok := m["active"].(bool); !ok || active != true {
+		t.Errorf("active = %v, want true", m["active"])
+	}
+
+	// Check array field
+	tags, ok := m["tags"].([]interface{})
+	if !ok || len(tags) != 2 {
+		t.Errorf("tags = %v, want [admin, verified]", m["tags"])
+	}
+
+	// Check nested object
+	profile, ok := m["profile"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("profile should be map, got %T", m["profile"])
+	}
+	if bio, ok := profile["bio"].(string); !ok || bio != "Developer" {
+		t.Errorf("profile.bio = %v, want Developer", profile["bio"])
+	}
+}
+
+// =============================================================================
+// UINT() AND LESS() METHOD TESTS
+// =============================================================================
+
+func TestResult_Uint(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		path string
+		want uint64
+	}{
+		{
+			name: "positive_number",
+			json: `{"value":42}`,
+			path: "value",
+			want: 42,
+		},
+		{
+			name: "large_number",
+			json: `{"value":18446744073709551615}`,
+			path: "value",
+			want: 18446744073709551615,
+		},
+		{
+			name: "string_number",
+			json: `{"value":"123"}`,
+			path: "value",
+			want: 123,
+		},
+		{
+			name: "bool_true",
+			json: `{"value":true}`,
+			path: "value",
+			want: 1,
+		},
+		{
+			name: "bool_false",
+			json: `{"value":false}`,
+			path: "value",
+			want: 0,
+		},
+		{
+			name: "null_value",
+			json: `{"value":null}`,
+			path: "value",
+			want: 0,
+		},
+		{
+			name: "non_existent",
+			json: `{"other":1}`,
+			path: "value",
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+			got := result.Uint()
+			if got != tt.want {
+				t.Errorf("Uint() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResult_Less(t *testing.T) {
+	tests := []struct {
+		name          string
+		json1         string
+		path1         string
+		json2         string
+		path2         string
+		caseSensitive bool
+		want          bool
+	}{
+		// Type priority tests
+		{
+			name:          "null_less_than_bool",
+			json1:         `{"a":null}`,
+			path1:         "a",
+			json2:         `{"b":true}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          true,
+		},
+		{
+			name:          "bool_less_than_number",
+			json1:         `{"a":true}`,
+			path1:         "a",
+			json2:         `{"b":1}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          true,
+		},
+		{
+			name:          "number_less_than_string",
+			json1:         `{"a":999}`,
+			path1:         "a",
+			json2:         `{"b":"hello"}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          true,
+		},
+		// Same type comparisons
+		{
+			name:          "false_less_than_true",
+			json1:         `{"a":false}`,
+			path1:         "a",
+			json2:         `{"b":true}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          true,
+		},
+		{
+			name:          "true_not_less_than_false",
+			json1:         `{"a":true}`,
+			path1:         "a",
+			json2:         `{"b":false}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          false,
+		},
+		{
+			name:          "number_comparison",
+			json1:         `{"a":5}`,
+			path1:         "a",
+			json2:         `{"b":10}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          true,
+		},
+		{
+			name:          "number_equal",
+			json1:         `{"a":5}`,
+			path1:         "a",
+			json2:         `{"b":5}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          false,
+		},
+		{
+			name:          "string_case_sensitive",
+			json1:         `{"a":"Apple"}`,
+			path1:         "a",
+			json2:         `{"b":"banana"}`,
+			path2:         "b",
+			caseSensitive: true,
+			want:          true, // 'A' < 'b' in ASCII
+		},
+		{
+			name:          "string_case_insensitive",
+			json1:         `{"a":"banana"}`,
+			path1:         "a",
+			json2:         `{"b":"Apple"}`,
+			path2:         "b",
+			caseSensitive: false,
+			want:          false, // "banana" > "apple" case-insensitive
+		},
+		{
+			name:          "string_case_insensitive_less",
+			json1:         `{"a":"Apple"}`,
+			path1:         "a",
+			json2:         `{"b":"banana"}`,
+			path2:         "b",
+			caseSensitive: false,
+			want:          true, // "apple" < "banana" case-insensitive
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r1 := Get([]byte(tt.json1), tt.path1)
+			r2 := Get([]byte(tt.json2), tt.path2)
+			got := r1.Less(r2, tt.caseSensitive)
+			if got != tt.want {
+				t.Errorf("Less() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

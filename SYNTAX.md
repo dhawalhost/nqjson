@@ -7,9 +7,12 @@ This document provides a comprehensive guide to all path expression syntaxes sup
 - [Basic Syntax](#basic-syntax)
 - [Array Operations](#array-operations)
 - [Advanced Expressions](#advanced-expressions)
+- [Query Syntax](#query-syntax)
 - [Filter Expressions](#filter-expressions)
 - [Wildcard Patterns](#wildcard-patterns)
 - [Modifiers](#modifiers)
+- [JSON Lines Support](#json-lines-support)
+- [Escape Sequences](#escape-sequences)
 - [SET Operation Syntax](#set-operation-syntax)
 - [Path Compilation](#path-compilation)
 - [Syntax Reference](#syntax-reference)
@@ -83,11 +86,42 @@ path := "users[0].phones.1"   // Second phone of first user
 
 ### Special Array Indices
 
-#### Last Element (SET only)
+#### Appending to Arrays (SET only)
+
+You can append values to the end of an array using the `-1` index:
 
 ```go
-path := "items.-1"       // For SET operations, appends to the end of array
+// Using dot notation
+path := "items.-1"       // Appends to the end of the "items" array
+
+// Using bracket notation  
+path := "items[-1]"      // Equivalent to items.-1
+
+// Nested arrays
+path := "users.0.tags.-1"    // Appends to the tags array of the first user
+path := "data.results[-1]"   // Appends to the results array
 ```
+
+**Example:**
+
+```go
+json := `{"items":[1,2,3]}`
+
+// Append using dot notation
+result, _ := nqjson.Set([]byte(json), "items.-1", 4)
+// Result: {"items":[1,2,3,4]}
+
+// Append using bracket notation
+result, _ := nqjson.Set([]byte(json), "items[-1]", 5)
+// Result: {"items":[1,2,3,4,5]}
+
+// Append object to array
+json2 := `{"users":[{"name":"Alice"}]}`
+result, _ := nqjson.Set([]byte(json2), "users.-1", map[string]interface{}{"name": "Bob"})
+// Result: {"users":[{"name":"Alice"},{"name":"Bob"}]}
+```
+
+**Note:** The `-1` index only works for SET operations to append values. For GET operations, use standard indexing to access the last element (e.g., calculate the index based on array length).
 
 #### All Elements
 
@@ -128,6 +162,88 @@ path := "data.results[0].nested[2].id"  // Multiple nested arrays
 path := "store.books.0.authors[1].name"    // Author name from first book
 path := "api.endpoints[3].params.0.type"   // Parameter type from fourth endpoint
 ```
+
+## Query Syntax
+
+nqjson supports powerful query syntax for conditional array element selection:
+
+### First Match Query `#(condition)`
+
+Returns the first array element matching the condition:
+
+```go
+path := "friends.#(first==\"Dale\")"       // First friend where first equals "Dale"
+path := "friends.#(age>40)"                // First friend older than 40
+path := "items.#(active==true)"            // First active item
+```
+
+### All Matches Query `#(condition)#`
+
+Returns all array elements matching the condition:
+
+```go
+path := "friends.#(age>35)#"               // All friends older than 35
+path := "friends.#(nets.#(==\"fb\")#)#"    // Friends with "fb" in their nets array
+path := "items.#(status==\"active\")#"     // All active items
+```
+
+### Field Access After Query
+
+Access specific fields from query results:
+
+```go
+path := "friends.#(age>35)#.first"         // Names of all friends older than 35
+path := "items.#(active==true).name"       // Name of first active item
+```
+
+### Query Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `==` | Equals (strings/numbers) | `#(name=="John")` |
+| `!=` | Not equals | `#(status!="inactive")` |
+| `<` | Less than | `#(age<30)` |
+| `<=` | Less than or equal | `#(price<=100)` |
+| `>` | Greater than | `#(score>90)` |
+| `>=` | Greater than or equal | `#(rating>=4)` |
+| `%` | Pattern match (wildcard) | `#(name%"J*")` |
+| `!%` | Negated pattern match | `#(name!%"Admin*")` |
+
+### Pattern Matching in Queries
+
+Use `%` for wildcard pattern matching:
+
+```go
+path := "friends.#(first%\"D*\").last"     // Last name of friends whose first starts with D
+path := "friends.#(first!%\"D*\").last"    // Last name of friends whose first doesn't start with D
+path := "items.#(name%\"*test*\")#"        // All items with "test" in name
+```
+
+### Direct Value Queries
+
+Query arrays of primitive values directly:
+
+```go
+path := "tags.#(==\"featured\")"           // Find "featured" in tags array
+path := "scores.#(>90)#"                   // All scores greater than 90
+```
+
+**Example:**
+
+```json
+{
+  "friends": [
+    {"first": "Dale", "last": "Murphy", "age": 44},
+    {"first": "Roger", "last": "Craig", "age": 68},
+    {"first": "Jane", "last": "Murphy", "age": 47}
+  ]
+}
+```
+
+- `friends.#(first=="Dale").last` → `"Murphy"`
+- `friends.#(age>45)#.first` → `["Roger", "Jane"]`
+- `friends.#(last%"Mur*")#.first` → `["Dale", "Jane"]`
+- `friends.#` → `3` (array length)
 
 ## Filter Expressions
 
@@ -203,18 +319,34 @@ path := `users[?(@.active==true)].email`      // Get emails of active users
 
 ## Wildcard Patterns
 
-### Object Wildcard
+nqjson supports two types of wildcards for flexible path matching:
+
+### Multi-Character Wildcard `*`
+
+Matches any number of characters (including zero):
 
 ```go
-path := "*.name"              // Get "name" from all top-level objects
+path := "child*.first"        // Match "children", "child1", etc.
+path := "c?ild.first"         // Match any single character: "child", "chald", etc.
+path := "*.name"              // Get "name" from all top-level keys
 path := "user.*.email"        // Get "email" from all fields under "user"
-path := "data.*.status"       // Get "status" from all objects in "data"
 ```
 
-### Array Wildcard
+### Single-Character Wildcard `?`
+
+Matches exactly one character:
+
+```go
+path := "item?"               // Matches "item1", "items", etc.
+path := "user?.name"          // Matches "user1.name", "userA.name", etc.
+path := "c?t"                 // Matches "cat", "cut", "cot", etc.
+```
+
+### Array Wildcards
 
 ```go
 path := "items.*"             // Get all values from items array
+path := "items.#"             // Get all elements (alternative)
 path := "users.*.preferences" // Get preferences from all users
 ```
 
@@ -222,6 +354,7 @@ path := "users.*.preferences" // Get preferences from all users
 
 ```go
 path := "*.phones.*.type"     // Get all phone types from all users
+path := "user*.data.item?"    // Complex nested wildcard patterns
 ```
 
 **Example:**
@@ -241,22 +374,201 @@ path := "*.phones.*.type"     // Get all phone types from all users
 
 ## Modifiers
 
-Modifiers can be applied to path expressions to transform results:
+Modifiers transform results using the `@` prefix and pipe `|` syntax:
+
+### Basic Modifier Syntax
+
+```go
+path := "items|@reverse"      // Reverse array order
+path := "users|@sort"         // Sort array elements
+path := "data|@flatten"       // Flatten nested arrays
+```
 
 ### Available Modifiers
 
+#### Array Transformation Modifiers
+
+| Modifier | Description | Example |
+|----------|-------------|---------|
+| `@reverse` | Reverse array order | `items\|@reverse` |
+| `@sort` | Sort array (ascending) | `scores\|@sort` |
+| `@flatten` | Flatten nested arrays | `nested\|@flatten` |
+| `@distinct` / `@unique` | Remove duplicates | `tags\|@distinct` |
+| `@keys` | Get object keys as array | `user\|@keys` |
+| `@values` | Get object values as array | `user\|@values` |
+| `@first` | Get first element | `items\|@first` |
+| `@last` | Get last element | `items\|@last` |
+
+#### Aggregate Modifiers
+
+| Modifier | Description | Example |
+|----------|-------------|---------|
+| `@sum` | Sum of numeric array | `prices\|@sum` |
+| `@avg` / `@average` / `@mean` | Average of numeric array | `scores\|@avg` |
+| `@min` | Minimum value | `values\|@min` |
+| `@max` | Maximum value | `values\|@max` |
+| `@count` / `@length` / `@len` | Array length | `items\|@count` |
+
+#### Format Modifiers
+
+| Modifier | Description | Example |
+|----------|-------------|---------|
+| `@pretty` | Pretty print JSON | `data\|@pretty` |
+| `@pretty:{"indent":"\t"}` | Pretty print with custom indent | `data\|@pretty:{"indent":"\t"}` |
+| `@ugly` | Minify JSON | `data\|@ugly` |
+| `@valid` | Validate JSON (returns if valid) | `data\|@valid` |
+| `@this` | Return current value unchanged | `@this` |
+
+#### Type Conversion Modifiers
+
+| Modifier | Description | Example |
+|----------|-------------|---------|
+| `@string` / `@str` | Convert to string | `value\|@string` |
+| `@number` / `@num` | Convert to number | `value\|@number` |
+| `@bool` / `@boolean` | Convert to boolean | `value\|@bool` |
+| `@base64` | Base64 encode | `data\|@base64` |
+| `@base64decode` | Base64 decode | `data\|@base64decode` |
+| `@lower` | Convert to lowercase | `name\|@lower` |
+| `@upper` | Convert to uppercase | `name\|@upper` |
+| `@type` | Get JSON type as string | `value\|@type` |
+| `@join` / `@join:","` | Join array to string | `tags\|@join` |
+
+### Modifier Chaining
+
+Chain multiple modifiers together:
+
 ```go
-path := "items@reverse"       // Reverse array order
-path := "users@sort"          // Sort array elements
-path := "data@group"          // Group array elements
+path := "items|@reverse|@first"           // Last item (reversed, then first)
+path := "children|@reverse|0"             // First element after reversing
+path := "scores|@sort|@reverse"           // Sort descending
+path := "tags|@distinct|@sort"            // Unique sorted tags
+path := "values|@flatten|@sum"            // Flatten then sum
 ```
 
-### Combined with Paths
+### Modifiers with Path Continuation
+
+Apply modifiers and continue with path access:
 
 ```go
-path := "users.#.name@sort"   // Get all names and sort them
-path := "items.#@reverse"     // Get all items in reverse order
+path := "children|@reverse|0"             // First element of reversed array
+path := "data|@sort|0.name"               // Name of first sorted item
 ```
+
+### Standalone Modifiers
+
+Use modifiers at the start of path:
+
+```go
+path := "@this"                           // Return entire JSON unchanged
+path := "@valid"                          // Validate and return JSON
+path := "@pretty"                         // Pretty print entire JSON
+path := "@ugly"                           // Minify entire JSON
+```
+
+**Example:**
+
+```json
+{
+  "children": ["Sara", "Alex", "Jack"],
+  "scores": [85, 92, 78, 95, 88]
+}
+```
+
+- `children|@reverse` → `["Jack", "Alex", "Sara"]`
+- `children|@reverse|0` → `"Jack"`
+- `scores|@sort` → `[78, 85, 88, 92, 95]`
+- `scores|@sum` → `438`
+- `scores|@avg` → `87.6`
+- `scores|@min` → `78`
+- `scores|@max` → `95`
+
+## JSON Lines Support
+
+nqjson supports JSON Lines (newline-delimited JSON) with the `..` prefix:
+
+### Count JSON Lines
+
+```go
+path := "..#"                  // Count number of JSON lines
+```
+
+### Access JSON Lines
+
+```go
+path := "..0"                  // First JSON line
+path := "..1"                  // Second JSON line
+path := "..-1"                 // Last JSON line
+```
+
+### Query JSON Lines
+
+```go
+path := "..#.name"             // Get "name" from all JSON lines
+path := "..#(active==true)#"   // All active records across lines
+```
+
+**Example:**
+
+```
+{"name": "Alice", "age": 30}
+{"name": "Bob", "age": 25}
+{"name": "Charlie", "age": 35}
+```
+
+- `..#` → `3` (count of lines)
+- `..0.name` → `"Alice"`
+- `..#.name` → `["Alice", "Bob", "Charlie"]`
+
+## Escape Sequences
+
+### Escaping Special Characters
+
+Use backslash to escape special characters in key names:
+
+| Escape | Character | Description |
+|--------|-----------|-------------|
+| `\.` | `.` | Literal dot in key name |
+| `\:` | `:` | Literal colon in key name |
+| `\\` | `\` | Literal backslash |
+
+### Examples
+
+```go
+// Key with dot: {"fav.movie": "Inception"}
+path := `fav\.movie`                      // Access "fav.movie" key
+
+// Key with colon: {"user:name": "John"}
+path := `user\:name`                      // Access "user:name" key
+
+// Nested with escapes: {"a.b": {"c:d": "value"}}
+path := `a\.b.c\:d`                       // Access nested keys with special chars
+```
+
+### Colon Prefix for Literal Numeric Keys
+
+Use `:` prefix to treat numeric strings as object keys instead of array indices:
+
+```go
+// Object: {"123": "value"}
+path := `:123`                            // Access "123" as object key (not array index)
+
+// Nested: {"users": {"456": {"name": "John"}}}
+path := `users.:456.name`                 // Access numeric key in nested object
+```
+
+**Example:**
+
+```json
+{
+  "fav.movie": "Inception",
+  "user:config": {"theme": "dark"},
+  "data": {"123": "numeric key value"}
+}
+```
+
+- `fav\.movie` → `"Inception"`
+- `user\:config.theme` → `"dark"`
+- `data.:123` → `"numeric key value"`
 
 ## SET Operation Syntax
 
@@ -337,13 +649,26 @@ Invalid characters will result in compilation errors.
 | `key.subkey` | Nested object access | `user.name` | ✅ | ✅ |
 | `array.0` | Array index (dot notation) | `items.0` | ✅ | ✅ |
 | `array[0]` | Array index (bracket notation) | `items[0]` | ✅ | ✅ |
-| `array.-1` | Last element / append | `items.-1` | ❌ | ✅ |
-| `array.#` | All array elements | `items.#` | ✅ | ❌ |
+| `array.-1` | Append to array | `items.-1` | ❌ | ✅ |
+| `array.#` | Array length | `items.#` | ✅ | ❌ |
 | `array.#.key` | Key from all elements | `users.#.name` | ✅ | ❌ |
-| `*.key` | Wildcard object access | `*.name` | ✅ | ❌ |
-| `array[?(@.key==value)]` | Filter by equality | `users[?(@.active==true)]` | ✅ | Limited |
-| `array[?(@.key>value)]` | Filter by comparison | `items[?(@.price>10)]` | ✅ | Limited |
-| `path@modifier` | Apply modifier | `items@reverse` | ✅ | ❌ |
+| `*` | Multi-character wildcard | `child*.name` | ✅ | ❌ |
+| `?` | Single-character wildcard | `item?.value` | ✅ | ❌ |
+| `#(condition)` | First match query | `#(age>30)` | ✅ | ❌ |
+| `#(condition)#` | All matches query | `#(active==true)#` | ✅ | ❌ |
+| `#(field%"pattern")` | Pattern match query | `#(name%"J*")` | ✅ | ❌ |
+| `[?(@.key==value)]` | Filter by equality | `[?(@.active==true)]` | ✅ | Limited |
+| `[?(@.key>value)]` | Filter by comparison | `[?(@.price>10)]` | ✅ | Limited |
+| `path\|@modifier` | Apply modifier | `items\|@reverse` | ✅ | ❌ |
+| `@this` | Return current value | `@this` | ✅ | ❌ |
+| `@valid` | Validate JSON | `@valid` | ✅ | ❌ |
+| `@pretty` | Pretty print JSON | `@pretty` | ✅ | ❌ |
+| `@ugly` | Minify JSON | `@ugly` | ✅ | ❌ |
+| `\.` | Escaped dot in key | `fav\.movie` | ✅ | ✅ |
+| `\:` | Escaped colon in key | `user\:name` | ✅ | ✅ |
+| `:123` | Literal numeric key | `:123` | ✅ | ✅ |
+| `..#` | JSON Lines count | `..#` | ✅ | ❌ |
+| `..0` | JSON Lines access | `..0.name` | ✅ | ❌ |
 
 ### Complex Example
 
@@ -380,11 +705,16 @@ Invalid characters will result in compilation errors.
 
 - `store.books.0.title` → `"Go Programming"`
 - `store.books[1].price` → `19.99`
+- `store.books.#` → `2` (array length)
 - `store.books.#.title` → `["Go Programming", "Web Design"]`
-- `store.books[?(@.price>25)].title` → `["Go Programming"]`
+- `store.books.#(price>25).title` → `"Go Programming"` (first match)
+- `store.books.#(price>15)#.title` → `["Go Programming", "Web Design"]` (all matches)
 - `store.books.0.authors[0]` → `"John Doe"`
 - `store.books.#.metadata.category` → `["programming", "design"]`
-- `store.books[?(@.metadata.category=="programming")].authors.0` → `["John Doe"]`
+- `store.books.#(metadata.category=="programming").title` → `"Go Programming"`
+- `store.books.#.price|@sum` → `49.98`
+- `store.books.#.price|@avg` → `24.99`
+- `store.books.#.title|@reverse` → `["Web Design", "Go Programming"]`
 
 ## Error Handling
 

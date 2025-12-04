@@ -149,6 +149,75 @@ func GetCached(data []byte, path string) Result {
 	return result
 }
 
+// unescapePathGet unescapes special characters in a path segment for GET operations
+// Supports: \. (literal dot), \: (literal colon), \\ (literal backslash)
+func unescapePathGet(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			next := s[i+1]
+			if next == '.' || next == ':' || next == '\\' {
+				result.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		result.WriteByte(s[i])
+	}
+
+	return result.String()
+}
+
+// hasColonPrefixGet checks if a path segment starts with : to force object key interpretation
+func hasColonPrefixGet(s string) bool {
+	return len(s) > 1 && s[0] == ':'
+}
+
+// stripColonPrefixGet removes the leading : from a path segment
+func stripColonPrefixGet(s string) string {
+	if hasColonPrefixGet(s) {
+		return s[1:]
+	}
+	return s
+}
+
+// splitPathGet splits a path by dots while respecting escape sequences for GET operations
+func splitPathGet(path string) []string {
+	if !strings.Contains(path, "\\") {
+		return strings.Split(path, ".")
+	}
+
+	var parts []string
+	var current strings.Builder
+
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+1 < len(path) {
+			current.WriteByte(path[i])
+			i++
+			if i < len(path) {
+				current.WriteByte(path[i])
+			}
+		} else if path[i] == '.' {
+			parts = append(parts, current.String())
+			current.Reset()
+		} else {
+			current.WriteByte(path[i])
+		}
+	}
+
+	if current.Len() > 0 || len(parts) > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
+}
+
 // compilePath - Parse and compile a path for fast repeated execution
 func compilePath(path string) *compiledPath {
 	cp := &compiledPath{
@@ -177,71 +246,75 @@ func parsePathSegments(path string) []pathSegment {
 	}
 
 	var segments []pathSegment
-	i := 0
 
-	// Handle leading array index
-	if i < len(path) && path[i] >= '0' && path[i] <= '9' {
-		idx := 0
-		for i < len(path) && path[i] >= '0' && path[i] <= '9' {
-			idx = idx*10 + int(path[i]-'0')
-			i++
-		}
-		segments = append(segments, pathSegment{key: "", index: idx, isArray: true})
-		if i < len(path) && path[i] == '.' {
-			i++ // Skip dot
-		}
-	}
+	// Split by dots, respecting escape sequences
+	parts := splitPathGet(path)
 
-	// Parse remaining segments
-	for i < len(path) {
-		// Find end of current segment
-		start := i
-		for i < len(path) && path[i] != '.' && path[i] != '[' {
-			i++
+	for _, part := range parts {
+		if part == "" {
+			continue
 		}
 
-		if start < i {
-			key := path[start:i]
+		// Unescape the part
+		unescaped := unescapePathGet(part)
 
-			// Check if it's a numeric key (array access via dot notation)
-			isNumeric := true
-			idx := 0
-			for j := 0; j < len(key); j++ {
-				if key[j] < '0' || key[j] > '9' {
-					isNumeric = false
-					break
-				}
-				idx = idx*10 + int(key[j]-'0')
-			}
-
-			if isNumeric && len(key) > 0 {
-				segments = append(segments, pathSegment{key: "", index: idx, isArray: true})
-			} else {
-				segments = append(segments, pathSegment{key: key, index: -1, isArray: false})
-			}
+		// Check for colon prefix
+		forceObjectKey := hasColonPrefixGet(unescaped)
+		if forceObjectKey {
+			unescaped = stripColonPrefixGet(unescaped)
 		}
 
 		// Handle bracket notation
-		if i < len(path) && path[i] == '[' {
-			i++ // Skip '['
-			idx := 0
-			for i < len(path) && path[i] >= '0' && path[i] <= '9' {
-				idx = idx*10 + int(path[i]-'0')
-				i++
+		if strings.Contains(unescaped, "[") {
+			// Parse base and brackets
+			bracketIdx := strings.Index(unescaped, "[")
+			if bracketIdx > 0 {
+				// Has a base key before bracket
+				segments = append(segments, pathSegment{key: unescaped[:bracketIdx], index: -1, isArray: false})
 			}
-			if i < len(path) && path[i] == ']' {
-				i++ // Skip ']'
+
+			// Parse bracket indices
+			remaining := unescaped[bracketIdx:]
+			for len(remaining) > 0 && remaining[0] == '[' {
+				closeIdx := strings.Index(remaining, "]")
+				if closeIdx == -1 {
+					break
+				}
+
+				idxStr := remaining[1:closeIdx]
+				if idx, err := strconv.Atoi(idxStr); err == nil {
+					segments = append(segments, pathSegment{key: "", index: idx, isArray: true})
+				}
+
+				remaining = remaining[closeIdx+1:]
 			}
-			segments = append(segments, pathSegment{key: "", index: idx, isArray: true})
+			continue
 		}
 
-		// Skip dot
-		if i < len(path) && path[i] == '.' {
-			i++
+		// Check if it's a numeric key (array access via dot notation)
+		// But NOT if colon prefix was used
+		if !forceObjectKey && isAllDigitsGet(unescaped) {
+			idx, _ := strconv.Atoi(unescaped)
+			segments = append(segments, pathSegment{key: "", index: idx, isArray: true})
+		} else {
+			segments = append(segments, pathSegment{key: unescaped, index: -1, isArray: false})
 		}
 	}
 
 	return segments
+}
+
+// isAllDigitsGet checks if a string contains only digits
+func isAllDigitsGet(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // executeCompiledPath - Fast execution of pre-parsed path
@@ -1055,16 +1128,24 @@ func getSimplePath(data []byte, path string) Result {
 //go:inline
 //nolint:gocyclo
 func parseObjectRecursive(data []byte, pos int, path string) Result {
-	// Parse the first segment of the path
+	// Parse the first segment of the path, respecting escape sequences
 	segEnd := 0
-	for segEnd < len(path) && path[segEnd] != '.' && path[segEnd] != '[' {
+	for segEnd < len(path) {
+		if path[segEnd] == '\\' && segEnd+1 < len(path) {
+			// Skip escaped character
+			segEnd += 2
+			continue
+		}
+		if path[segEnd] == '.' || path[segEnd] == '[' {
+			break
+		}
 		segEnd++
 	}
 	if segEnd == 0 {
 		return Result{Type: TypeUndefined}
 	}
 
-	segment := path[:segEnd]
+	rawSegment := path[:segEnd]
 	remainingPath := ""
 	if segEnd < len(path) {
 		if path[segEnd] == '.' {
@@ -1072,6 +1153,13 @@ func parseObjectRecursive(data []byte, pos int, path string) Result {
 		} else {
 			remainingPath = path[segEnd:]
 		}
+	}
+
+	// Unescape the segment and handle colon prefix
+	segment := unescapePathGet(rawSegment)
+	forceObjectKey := hasColonPrefixGet(segment)
+	if forceObjectKey {
+		segment = stripColonPrefixGet(segment)
 	}
 
 	segLen := len(segment)
@@ -2291,6 +2379,9 @@ const (
 	tokenFilter
 	tokenRecursive
 	tokenModifier
+	tokenArrayLength // # for array length (when used alone)
+	tokenQueryFirst  // #(condition) for first match
+	tokenQueryAll    // #(condition)# for all matches
 )
 
 // pathToken represents a single token in a parsed path
@@ -2314,12 +2405,13 @@ type filterExpr struct {
 // path segments and avoids interference with filter "@.field" usage.
 //
 //nolint:gocyclo
-func parseModifiers(path string) ([]pathToken, string) {
+func parseModifiers(path string) ([]pathToken, string, string) {
 	var modifiers []pathToken
+	var remainingPath string
 
 	// Fast path: if neither '|' nor '@' present, return early
 	if !strings.ContainsAny(path, "|@") {
-		return modifiers, path
+		return modifiers, path, ""
 	}
 
 	// Scan for the first valid modifier separator position
@@ -2365,8 +2457,8 @@ func parseModifiers(path string) ([]pathToken, string) {
 			}
 		case '@':
 			if bracketDepth == 0 && parenDepth == 0 {
-				// Only treat as modifier if not immediately after a dot
-				if i > 0 && path[i-1] != '.' {
+				// Treat @ as modifier start if at beginning of path or not immediately after a dot
+				if i == 0 || (i > 0 && path[i-1] != '.') {
 					sepIdx = i
 					i = len(path) // break
 				}
@@ -2375,28 +2467,80 @@ func parseModifiers(path string) ([]pathToken, string) {
 	}
 
 	if sepIdx < 0 {
-		return modifiers, path
+		return modifiers, path, ""
 	}
 
 	// Extract suffix with modifiers and the main path
 	suffix := path[sepIdx+1:]
 	cleanPath := path[:sepIdx]
 
-	// Split suffix by either '|' or '@'
-	fields := strings.FieldsFunc(suffix, func(r rune) bool { return r == '|' || r == '@' })
-	for _, part := range fields {
+	// Parse modifiers and remaining path from suffix
+	// Format: modifier|modifier|path or modifier.path
+	parts := splitModifierParts(suffix)
+	for i, part := range parts {
 		if part == "" {
 			continue
 		}
-		parts := strings.SplitN(part, ":", 2)
-		mod := pathToken{kind: tokenModifier, str: parts[0]}
-		if len(parts) > 1 {
-			mod.str = parts[0] + ":" + parts[1] // Keep the full modifier
+		// Check if this looks like a modifier (starts with letter, known modifier names)
+		if isModifierName(part) {
+			modParts := strings.SplitN(part, ":", 2)
+			mod := pathToken{kind: tokenModifier, str: modParts[0]}
+			if len(modParts) > 1 {
+				mod.str = modParts[0] + ":" + modParts[1] // Keep the full modifier
+			}
+			modifiers = append(modifiers, mod)
+		} else {
+			// This is a path to apply after modifiers
+			// Join remaining parts as the path
+			remainingPath = strings.Join(parts[i:], "|")
+			break
 		}
-		modifiers = append(modifiers, mod)
 	}
 
-	return modifiers, cleanPath
+	return modifiers, cleanPath, remainingPath
+}
+
+// splitModifierParts splits a string by | and @ at depth 0
+func splitModifierParts(s string) []string {
+	var parts []string
+	var cur strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '|' || c == '@' {
+			if cur.Len() > 0 {
+				parts = append(parts, cur.String())
+				cur.Reset()
+			}
+		} else {
+			cur.WriteByte(c)
+		}
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	return parts
+}
+
+// isModifierName checks if a string is a known modifier name
+func isModifierName(s string) bool {
+	// Extract the base name before any ':'
+	name := s
+	if idx := strings.Index(s, ":"); idx >= 0 {
+		name = s[:idx]
+	}
+
+	knownModifiers := map[string]bool{
+		"reverse": true, "keys": true, "values": true, "flatten": true,
+		"first": true, "last": true, "join": true, "sort": true,
+		"distinct": true, "unique": true, "length": true, "count": true, "len": true,
+		"type": true, "string": true, "str": true, "number": true, "num": true,
+		"bool": true, "boolean": true, "base64": true, "base64decode": true,
+		"lower": true, "upper": true, "this": true, "valid": true,
+		"pretty": true, "ugly": true,
+		// Aggregate modifiers
+		"sum": true, "avg": true, "average": true, "mean": true, "min": true, "max": true,
+	}
+	return knownModifiers[name]
 }
 
 // parseArrayAccess parses array access syntax in path parts
@@ -2432,8 +2576,8 @@ func parseArrayAccess(part string) []pathToken {
 func tokenizePath(path string) []pathToken {
 	var tokens []pathToken
 
-	// Check for modifiers
-	modifiers, cleanPath := parseModifiers(path)
+	// Check for modifiers (returns modifiers, clean path, and remaining path after modifiers)
+	modifiers, cleanPath, remainingPath := parseModifiers(path)
 
 	// Split the path on dots, but respect brackets and parentheses so that
 	// dots inside filters like [?( @.age>28 )] don't split the segment.
@@ -2496,8 +2640,21 @@ func tokenizePath(path string) []pathToken {
 			continue
 		}
 
-		if part == "*" || part == "#" {
+		if part == "*" {
 			tokens = append(tokens, pathToken{kind: tokenWildcard})
+			continue
+		}
+
+		if part == "#" {
+			// # is used for array length/count or array wildcard depending on context
+			tokens = append(tokens, pathToken{kind: tokenArrayLength})
+			continue
+		}
+
+		// Check for query syntax: #(condition) or #(condition)#
+		if strings.HasPrefix(part, "#(") {
+			queryTokens := parseQueryExpression(part)
+			tokens = append(tokens, queryTokens...)
 			continue
 		}
 
@@ -2510,6 +2667,9 @@ func tokenizePath(path string) []pathToken {
 		if strings.HasSuffix(part, "]") && strings.Contains(part, "[") {
 			arrayTokens := parseArrayAccess(part)
 			tokens = append(tokens, arrayTokens...)
+		} else if idx, err := strconv.Atoi(part); err == nil && idx >= 0 {
+			// Pure numeric token - treat as array index
+			tokens = append(tokens, pathToken{kind: tokenIndex, num: idx})
 		} else {
 			tokens = append(tokens, pathToken{kind: tokenKey, str: part})
 		}
@@ -2518,7 +2678,142 @@ func tokenizePath(path string) []pathToken {
 	// Append modifiers at the end if any
 	tokens = append(tokens, modifiers...)
 
+	// If there's a remaining path after modifiers (e.g., "0" in "children|@reverse|0"),
+	// tokenize it and append those tokens
+	if remainingPath != "" {
+		remainingTokens := tokenizePath(remainingPath)
+		tokens = append(tokens, remainingTokens...)
+	}
+
 	return tokens
+}
+
+// parseQueryExpression parses query expressions: #(condition) or #(condition)#
+// Returns tokens for the query
+func parseQueryExpression(part string) []pathToken {
+	// Determine if this is first match (#(condition)) or all matches (#(condition)#)
+	isAllMatches := strings.HasSuffix(part, ")#")
+
+	// Extract the condition
+	var condition string
+	if isAllMatches {
+		// #(condition)# - strip leading #( and trailing )#
+		condition = part[2 : len(part)-2]
+	} else {
+		// #(condition) - strip leading #( and trailing )
+		condition = part[2 : len(part)-1]
+	}
+
+	// Parse the condition into a filter expression
+	filter := parseQueryCondition(condition)
+
+	if isAllMatches {
+		return []pathToken{{kind: tokenQueryAll, filter: filter}}
+	}
+	return []pathToken{{kind: tokenQueryFirst, filter: filter}}
+}
+
+// parseQueryCondition parses a query condition expression
+func parseQueryCondition(condition string) *filterExpr {
+	// For nested queries like "nets.#(==\"fb\")", the condition is the entire path
+	// We need to find operators that are NOT inside parentheses
+
+	// Find the operator at depth 0 (not inside nested queries)
+	var op string
+	opIdx := -1
+
+	// Track parentheses depth
+	depth := 0
+	inString := false
+	var stringChar byte
+
+	for i := 0; i < len(condition); i++ {
+		c := condition[i]
+
+		// Handle strings
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == '\\' && i+1 < len(condition) {
+				i++ // Skip escaped char
+				continue
+			}
+			if c == stringChar {
+				inString = false
+			}
+			continue
+		}
+
+		// Track depth
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			depth--
+			continue
+		}
+
+		// Only look for operators at depth 0
+		if depth > 0 {
+			continue
+		}
+
+		// Check for operators at this position
+		operators := []string{"==", "!=", ">=", "<=", ">", "<", "!%", "%"}
+		for _, operator := range operators {
+			if i+len(operator) <= len(condition) && condition[i:i+len(operator)] == operator {
+				opIdx = i
+				op = operator
+				break
+			}
+		}
+		if opIdx != -1 {
+			break
+		}
+	}
+
+	// If no operator found at depth 0, the entire condition is the path (for nested queries)
+	if opIdx == -1 {
+		// Could be a simple value check like #(=="fb") or a path like #(nets.#(=="fb"))
+		// Check if it starts with an operator
+		for _, operator := range []string{"==", "!=", ">=", "<=", ">", "<", "!%", "%"} {
+			if strings.HasPrefix(condition, operator) {
+				return &filterExpr{
+					path:  "",
+					op:    operator,
+					value: cleanQueryValue(condition[len(operator):]),
+				}
+			}
+		}
+		// Entire condition is a path - for nested queries, evaluate as existence
+		return &filterExpr{
+			path: condition,
+			op:   "",
+		}
+	}
+
+	// Split into path and value
+	path := strings.TrimSpace(condition[:opIdx])
+	value := strings.TrimSpace(condition[opIdx+len(op):])
+
+	return &filterExpr{
+		path:  path,
+		op:    op,
+		value: cleanQueryValue(value),
+	}
+}
+
+// cleanQueryValue removes quotes from query values
+func cleanQueryValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
 
 // parseFilterExpression parses a filter expression like '?(@.age>30)'
@@ -2581,12 +2876,13 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 	// Start with the root value
 	current := Parse(data)
 
-	// Filter out modifier tokens
-	modifiers, pathTokens := separateModifierTokens(tokens)
+	// Separate tokens into: before modifiers, modifiers, after modifiers
+	pathTokens, modifiers, afterModTokens := separateModifierTokens(tokens)
+	hasModifiers := len(modifiers) > 0
 
-	// Process each token
+	// Process tokens before modifiers
 	for i, token := range pathTokens {
-		result, shouldReturn := processPathToken(current, token, pathTokens, i)
+		result, shouldReturn := processPathToken(current, token, pathTokens, i, hasModifiers)
 		if shouldReturn {
 			// Use the result and stop processing more tokens; modifiers will be applied below
 			current = result
@@ -2600,37 +2896,55 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 	}
 
 	// Apply modifiers if any
-	if len(modifiers) > 0 {
+	if hasModifiers {
 		current = applyModifiersToResult(current, modifiers)
+	}
+
+	// Process tokens after modifiers (e.g., "0" in "children|@reverse|0")
+	for i, token := range afterModTokens {
+		result, shouldReturn := processPathToken(current, token, afterModTokens, i, false)
+		if shouldReturn {
+			current = result
+			break
+		}
+		current = result
+
+		if !current.Exists() {
+			return Result{Type: TypeUndefined}
+		}
 	}
 
 	return current
 }
 
-// separateModifierTokens separates modifier tokens from path tokens
-func separateModifierTokens(tokens []pathToken) ([]pathToken, []pathToken) {
-	var modifiers []pathToken
-	var pathTokens []pathToken
-
+// separateModifierTokens separates path tokens into: tokens before modifiers, modifiers, tokens after modifiers
+func separateModifierTokens(tokens []pathToken) (beforeMod []pathToken, modifiers []pathToken, afterMod []pathToken) {
+	foundModifier := false
 	for _, token := range tokens {
 		if token.kind == tokenModifier {
+			foundModifier = true
 			modifiers = append(modifiers, token)
+		} else if foundModifier {
+			// This token comes after the modifiers
+			afterMod = append(afterMod, token)
 		} else {
-			pathTokens = append(pathTokens, token)
+			// This token comes before any modifier
+			beforeMod = append(beforeMod, token)
 		}
 	}
 
-	return modifiers, pathTokens
+	return beforeMod, modifiers, afterMod
 }
 
 // processPathToken processes a single path token and returns the result and whether to return early
-func processPathToken(current Result, token pathToken, pathTokens []pathToken, i int) (Result, bool) {
+func processPathToken(current Result, token pathToken, pathTokens []pathToken, i int, hasModifiers bool) (Result, bool) {
 	switch token.kind {
 	case tokenKey:
-		// If current is an array due to wildcard/filter, project key over elements
+		// If current is an array due to wildcard/filter/query, project key over elements
 		if current.Type == TypeArray && i > 0 {
 			prev := pathTokens[i-1]
-			if prev.kind == tokenWildcard || prev.kind == tokenFilter {
+			if prev.kind == tokenWildcard || prev.kind == tokenFilter || prev.kind == tokenArrayLength ||
+				prev.kind == tokenQueryAll {
 				return processArrayProjection(current, pathTokens, i)
 			}
 		}
@@ -2639,8 +2953,14 @@ func processPathToken(current Result, token pathToken, pathTokens []pathToken, i
 		return processIndexToken(current, token)
 	case tokenWildcard:
 		return processWildcardToken(current, pathTokens, i)
+	case tokenArrayLength:
+		return processArrayLengthToken(current, pathTokens, i, hasModifiers)
 	case tokenFilter:
 		return processFilterToken(current, token)
+	case tokenQueryFirst:
+		return processQueryFirstToken(current, token)
+	case tokenQueryAll:
+		return processQueryAllToken(current, token)
 	case tokenRecursive:
 		return processRecursiveToken(current, pathTokens, i)
 	default:
@@ -2654,13 +2974,79 @@ func processKeyToken(current Result, token pathToken) (Result, bool) {
 		return Result{Type: TypeUndefined}, true
 	}
 
+	key := token.str
+
+	// Check if key contains pattern characters (* or ?)
+	if strings.ContainsAny(key, "*?") {
+		// Pattern matching on keys
+		return processKeyPattern(current, key)
+	}
+
 	// Use direct object lookup instead of ForEach to avoid allocations
-	start, end := fastFindObjectValue(current.Raw, token.str)
+	start, end := fastFindObjectValue(current.Raw, key)
 	if start == -1 {
 		return Result{Type: TypeUndefined}, true
 	}
 
 	return fastParseValue(current.Raw[start:end]), false
+}
+
+// processKeyPattern handles pattern matching on object keys (e.g., child*, c?ildren)
+func processKeyPattern(current Result, pattern string) (Result, bool) {
+	var matchedValue Result
+	found := false
+
+	current.ForEach(func(key, value Result) bool {
+		if matchPattern(key.Str, pattern) {
+			matchedValue = value
+			found = true
+			return false // Stop after first match
+		}
+		return true
+	})
+
+	if !found {
+		return Result{Type: TypeUndefined}, true
+	}
+	return matchedValue, false
+}
+
+// matchPattern matches a string against a glob pattern with * (any chars) and ? (single char)
+func matchPattern(s, pattern string) bool {
+	return matchPatternHelper(s, pattern, 0, 0)
+}
+
+func matchPatternHelper(s, pattern string, si, pi int) bool {
+	for pi < len(pattern) {
+		if pattern[pi] == '*' {
+			// * matches zero or more characters
+			// Try matching zero characters first, then more
+			for si <= len(s) {
+				if matchPatternHelper(s, pattern, si, pi+1) {
+					return true
+				}
+				si++
+			}
+			return false
+		} else if pattern[pi] == '?' {
+			// ? matches exactly one character
+			if si >= len(s) {
+				return false
+			}
+			si++
+			pi++
+		} else {
+			// Regular character - must match exactly
+			if si >= len(s) || s[si] != pattern[pi] {
+				return false
+			}
+			si++
+			pi++
+		}
+	}
+
+	// Pattern exhausted, string must also be exhausted
+	return si == len(s)
 }
 
 // processIndexToken handles array index access
@@ -2693,6 +3079,124 @@ func processWildcardToken(current Result, pathTokens []pathToken, i int) (Result
 	}
 
 	return processWildcardCollection(current, pathTokens, i)
+}
+
+// processArrayLengthToken handles # token for array length or array wildcard
+// array.# returns the count, array.#.field returns all field values
+// Also acts as wildcard when followed by modifiers (items.#@reverse)
+func processArrayLengthToken(current Result, pathTokens []pathToken, i int, hasModifiers bool) (Result, bool) {
+	// Check if this is truly the last token OR if there are more path tokens after #
+	// Note: modifiers are separated out, so we also check hasModifiers
+	isLast := i == len(pathTokens)-1
+
+	// If this is the last path token AND there are no modifiers, return the count
+	// If there are modifiers (like @reverse), we need to return all elements
+	if isLast && !hasModifiers {
+		switch current.Type {
+		case TypeArray:
+			count := fastCountArrayElements(current.Raw)
+			return buildCountResult(count), true
+		case TypeObject:
+			count := len(current.Map())
+			return buildCountResult(count), true
+		default:
+			return Result{Type: TypeUndefined}, true
+		}
+	}
+
+	// If there are more tokens after # OR there are modifiers, act as wildcard (get all elements)
+	// This handles cases like array.#.field and array.#@reverse
+	if current.Type != TypeArray && current.Type != TypeObject {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	return processWildcardCollection(current, pathTokens, i)
+}
+
+// fastCountArrayElements counts array elements without parsing them
+func fastCountArrayElements(data []byte) int {
+	if len(data) < 2 || data[0] != '[' {
+		return 0
+	}
+
+	// Skip opening bracket
+	pos := 1
+
+	// Skip whitespace
+	for pos < len(data) && (data[pos] == ' ' || data[pos] == '\t' || data[pos] == '\n' || data[pos] == '\r') {
+		pos++
+	}
+
+	// Check for empty array
+	if pos < len(data) && data[pos] == ']' {
+		return 0
+	}
+
+	count := 0
+	depth := 0
+
+	for pos < len(data) {
+		c := data[pos]
+
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			pos++
+			continue
+		case '[', '{':
+			if depth == 0 && count == 0 {
+				count = 1
+			}
+			depth++
+			pos++
+			continue
+		case ']':
+			if depth == 0 {
+				return count
+			}
+			depth--
+			pos++
+			continue
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+			pos++
+			continue
+		case '"':
+			// Count this element if at depth 0 and first char
+			if depth == 0 && count == 0 {
+				count = 1
+			}
+			// Skip string
+			pos++
+			for pos < len(data) {
+				if data[pos] == '\\' {
+					pos += 2
+					continue
+				}
+				if data[pos] == '"' {
+					pos++
+					break
+				}
+				pos++
+			}
+			continue
+		case ',':
+			if depth == 0 {
+				count++
+			}
+			pos++
+			continue
+		default:
+			// Count this element if at depth 0 and we haven't counted yet
+			if depth == 0 && count == 0 {
+				count = 1
+			}
+			pos++
+		}
+	}
+
+	return count
 }
 
 // processWildcardCollection handles wildcard collection processing
@@ -2870,6 +3374,111 @@ func processFilterToken(current Result, token pathToken) (Result, bool) {
 	}, false
 }
 
+// processQueryFirstToken handles #(condition) - returns first matching element
+func processQueryFirstToken(current Result, token pathToken) (Result, bool) {
+	if current.Type != TypeArray {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Find first match
+	var match Result
+	found := false
+	current.ForEach(func(_, value Result) bool {
+		if matchesQueryCondition(value, token.filter) {
+			match = value
+			found = true
+			return false // Stop after first match
+		}
+		return true
+	})
+
+	if !found {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	return match, false
+}
+
+// processQueryAllToken handles #(condition)# - returns all matching elements
+func processQueryAllToken(current Result, token pathToken) (Result, bool) {
+	if current.Type != TypeArray {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Find all matches
+	var matches []Result
+	current.ForEach(func(_, value Result) bool {
+		if matchesQueryCondition(value, token.filter) {
+			matches = append(matches, value)
+		}
+		return true
+	})
+
+	if len(matches) == 0 {
+		return Result{Type: TypeUndefined}, true
+	}
+
+	// Create a new array result
+	var raw bytes.Buffer
+	raw.WriteByte('[')
+	for i, val := range matches {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		raw.Write(val.Raw)
+	}
+	raw.WriteByte(']')
+
+	return Result{
+		Type: TypeArray,
+		Raw:  raw.Bytes(),
+	}, false
+}
+
+// matchesQueryCondition checks if a value matches a query condition
+func matchesQueryCondition(value Result, filter *filterExpr) bool {
+	// Get the value to filter on
+	var filterValue Result
+	if filter.path == "" {
+		filterValue = value
+	} else {
+		filterValue = value.Get(filter.path)
+	}
+
+	if !filterValue.Exists() {
+		return false
+	}
+
+	// If no operator, just check existence
+	if filter.op == "" {
+		return true
+	}
+
+	// Compare based on operator
+	switch filter.op {
+	case "=", constEq:
+		return compareEqual(filterValue, filter.value)
+	case "!=":
+		return !compareEqual(filterValue, filter.value)
+	case ">":
+		return compareGreater(filterValue, filter.value)
+	case "<":
+		return compareLess(filterValue, filter.value)
+	case ">=":
+		return compareGreaterEqual(filterValue, filter.value)
+	case "<=":
+		return compareLessEqual(filterValue, filter.value)
+	case "%":
+		// Pattern matching
+		return matchPattern(filterValue.String(), filter.value)
+	case "!%":
+		// Negative pattern matching
+		return !matchPattern(filterValue.String(), filter.value)
+	}
+
+	return false
+}
+
 // processRecursiveToken handles recursive token processing
 func processRecursiveToken(current Result, pathTokens []pathToken, i int) (Result, bool) {
 	if i == len(pathTokens)-1 {
@@ -2965,6 +3574,54 @@ func compareLess(result Result, value string) bool {
 			return false
 		}
 		return result.Num < valueNum
+	default:
+		return false
+	}
+}
+
+// compareGreater compares if a result is greater than a string value
+func compareGreater(result Result, value string) bool {
+	switch result.Type {
+	case TypeString:
+		return result.Str > value
+	case TypeNumber:
+		valueNum, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return false
+		}
+		return result.Num > valueNum
+	default:
+		return false
+	}
+}
+
+// compareGreaterEqual compares if a result is greater than or equal to a string value
+func compareGreaterEqual(result Result, value string) bool {
+	switch result.Type {
+	case TypeString:
+		return result.Str >= value
+	case TypeNumber:
+		valueNum, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return false
+		}
+		return result.Num >= valueNum
+	default:
+		return false
+	}
+}
+
+// compareLessEqual compares if a result is less than or equal to a string value
+func compareLessEqual(result Result, value string) bool {
+	switch result.Type {
+	case TypeString:
+		return result.Str <= value
+	case TypeNumber:
+		valueNum, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return false
+		}
+		return result.Num <= valueNum
 	default:
 		return false
 	}
@@ -3099,6 +3756,14 @@ func applyModifier(result Result, modifier string) Result {
 		return applyMinModifier(result)
 	case "max":
 		return applyMaxModifier(result)
+	case "this":
+		return applyThisModifier(result)
+	case "valid":
+		return applyValidModifier(result)
+	case "pretty":
+		return applyPrettyModifier(result, arg)
+	case "ugly":
+		return applyUglyModifier(result)
 	}
 
 	// Return original result if no modifier was applied
@@ -3634,6 +4299,81 @@ func buildNumberResult(value float64) Result {
 		Type:     TypeNumber,
 		Num:      value,
 		Raw:      []byte(raw),
+		Modified: true,
+	}
+}
+
+// applyThisModifier returns the result unchanged (@this)
+func applyThisModifier(result Result) Result {
+	result.Modified = true
+	return result
+}
+
+// applyValidModifier validates JSON and returns it if valid (@valid)
+func applyValidModifier(result Result) Result {
+	// If the result has valid Raw JSON, return it
+	if len(result.Raw) > 0 && result.Exists() {
+		result.Modified = true
+		return result
+	}
+	return Result{Type: TypeUndefined}
+}
+
+// applyPrettyModifier formats JSON with indentation (@pretty)
+func applyPrettyModifier(result Result, arg string) Result {
+	if len(result.Raw) == 0 {
+		return result
+	}
+
+	// Default indent options
+	indent := "  "
+	prefix := ""
+
+	// Parse argument if provided (e.g., @pretty:{"indent":"\t"})
+	if arg != "" {
+		argResult := Parse([]byte(arg))
+		if indentVal := argResult.Get("indent"); indentVal.Exists() {
+			indent = indentVal.String()
+		}
+		if prefixVal := argResult.Get("prefix"); prefixVal.Exists() {
+			prefix = prefixVal.String()
+		}
+	}
+
+	// Use standard library to pretty print
+	var out bytes.Buffer
+	if err := json.Indent(&out, result.Raw, prefix, indent); err != nil {
+		return result // Return unchanged on error
+	}
+
+	return Result{
+		Type:     result.Type,
+		Str:      result.Str,
+		Num:      result.Num,
+		Boolean:  result.Boolean,
+		Raw:      out.Bytes(),
+		Modified: true,
+	}
+}
+
+// applyUglyModifier minifies JSON by removing whitespace (@ugly)
+func applyUglyModifier(result Result) Result {
+	if len(result.Raw) == 0 {
+		return result
+	}
+
+	// Use compact from encoding/json
+	var out bytes.Buffer
+	if err := json.Compact(&out, result.Raw); err != nil {
+		return result // Return unchanged on error
+	}
+
+	return Result{
+		Type:     result.Type,
+		Str:      result.Str,
+		Num:      result.Num,
+		Boolean:  result.Boolean,
+		Raw:      out.Bytes(),
 		Modified: true,
 	}
 }
@@ -4602,6 +5342,24 @@ func (r Result) Int() int64 {
 	}
 }
 
+// Uint returns the result as a uint64
+func (r Result) Uint() uint64 {
+	switch r.Type {
+	case TypeNumber:
+		return uint64(r.Num)
+	case TypeString:
+		n, _ := strconv.ParseUint(r.Str, 10, 64)
+		return n
+	case TypeBoolean:
+		if r.Boolean {
+			return 1
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
 // Float returns the result as a float64
 func (r Result) Float() float64 {
 	switch r.Type {
@@ -4864,6 +5622,97 @@ func (r Result) Time() (time.Time, error) {
 	}
 
 	return time.Time{}, ErrTypeConversion
+}
+
+// Value returns the result as a native Go type (interface{}).
+// Returns:
+//   - nil for TypeNull or non-existent values
+//   - bool for TypeBoolean
+//   - float64 for TypeNumber
+//   - string for TypeString
+//   - []interface{} for TypeArray
+//   - map[string]interface{} for TypeObject
+func (r Result) Value() interface{} {
+	switch r.Type {
+	case TypeNull, TypeUndefined:
+		return nil
+	case TypeBoolean:
+		return r.Boolean
+	case TypeNumber:
+		return r.Num
+	case TypeString:
+		return r.Str
+	case TypeArray:
+		arr := r.Array()
+		result := make([]interface{}, len(arr))
+		for i, v := range arr {
+			result[i] = v.Value()
+		}
+		return result
+	case TypeObject:
+		m := r.Map()
+		result := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			result[k] = v.Value()
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+// Less compares two Result values and returns true if r is less than token.
+// The comparison rules are:
+//   - Null < Boolean < Number < String < Array/Object
+//   - For booleans: false < true
+//   - For numbers: numeric comparison
+//   - For strings: lexicographic comparison (case-sensitive or insensitive based on caseSensitive parameter)
+func (r Result) Less(token Result, caseSensitive bool) bool {
+	// Define type priority: Null=0, Boolean=1, Number=2, String=3, Array/Object=4
+	typePriority := func(t ValueType) int {
+		switch t {
+		case TypeNull, TypeUndefined:
+			return 0
+		case TypeBoolean:
+			return 1
+		case TypeNumber:
+			return 2
+		case TypeString:
+			return 3
+		default:
+			return 4
+		}
+	}
+
+	rPriority := typePriority(r.Type)
+	tokenPriority := typePriority(token.Type)
+
+	// Different types: compare by priority
+	if rPriority != tokenPriority {
+		return rPriority < tokenPriority
+	}
+
+	// Same type: compare by value
+	switch r.Type {
+	case TypeNull, TypeUndefined:
+		return false // Both are null/undefined, equal
+	case TypeBoolean:
+		// false < true
+		if r.Boolean == token.Boolean {
+			return false
+		}
+		return !r.Boolean && token.Boolean
+	case TypeNumber:
+		return r.Num < token.Num
+	case TypeString:
+		if caseSensitive {
+			return r.Str < token.Str
+		}
+		return strings.ToLower(r.Str) < strings.ToLower(token.Str)
+	default:
+		// For arrays/objects, compare raw JSON string representation
+		return string(r.Raw) < string(token.Raw)
+	}
 }
 
 //------------------------------------------------------------------------------
