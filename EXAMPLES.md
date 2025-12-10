@@ -619,6 +619,233 @@ func dataTransformation() {
 
     fmt.Println("Flattened:", string(result))
 }
+
+### Grouping Flattened Settings with `nqjson.Set`
+
+```go
+func groupSettingsWithNQJSON() {
+    // settings array contains flattened field objects
+    input := []byte(`{
+        "settings": [
+            {
+                "default": "PCA",
+                "disabledSubmodelColors": {},
+                "disabledSubmodelIds": [],
+                "fieldType": "Select dropdown",
+                "generatedId": "aadata - bf2c2938-7343-4476-81d4-5dfb0b51853b - 8d6817af-bff6-4bd8-850b-de53caa8d820 - 1",
+                "isObjective": false,
+                "manualId": "dimrudtype",
+                "max": 100,
+                "min": 0,
+                "name": "Type",
+                "options": ["PCA", "NMF"],
+                "referredSubmodelNames": {},
+                "sectionDetails": {
+                    "dimensionSplit": "Channel",
+                    "dimensionSplitId": 1,
+                    "dimensionSplitName": "paiddigitaldisplay",
+                    "generatedId": "8d6817af-bff6-4bd8-850b-de53caa8d820",
+                    "manualId": "dimredu",
+                    "name": "Dimensionality Reduction",
+                    "toggleName": "Add Dim"
+                },
+                "submodelValues": {
+                    "d11c123b-b1a6-4581-8561-f2bf4a13a856": "PCA"
+                },
+                "toggleName": "Add Dim",
+                "variableDetails": {
+                    "dimensionSplit": "No split",
+                    "dimensionSplitName": "",
+                    "generatedId": "aadata",
+                    "manualId": "aadata",
+                    "name": "aadata"
+                }
+            }
+        ]
+    }`)
+
+    result := []byte(`{}`)
+
+    // Copy top-level variableDetails once from the 0th settings entry
+    varDetails := nqjson.Get(input, "settings.0.variableDetails")
+    if varDetails.Exists() {
+        var err error
+        result, err = nqjson.Set(result, "variableDetails", []byte(varDetails.Raw))
+        if err != nil {
+            panic(err)
+        }
+    }
+
+    secIndex := map[string]int{}
+    total := nqjson.Get(input, "settings.#").Int()
+
+    for i := int64(0); i < total; i++ {
+        field := nqjson.Get(input, fmt.Sprintf("settings.%d", i))
+        if !field.Exists() {
+            continue
+        }
+
+        fraw := []byte(field.Raw)
+        secID := nqjson.Get(fraw, "sectionDetails.generatedId").String()
+        if secID == "" {
+            secID = nqjson.Get(fraw, "sectionDetails.manualId").String()
+        }
+        if secID == "" {
+            continue
+        }
+
+        // Create section bucket if not seen
+        idx, ok := secIndex[secID]
+        if !ok {
+            var err error
+            result, err = nqjson.Set(result, "sections.-1.sectionDetails", []byte(nqjson.Get(fraw, "sectionDetails").Raw))
+            if err != nil {
+                panic(err)
+            }
+
+            count := nqjson.Get(result, "sections.#").Int()
+            idx = int(count - 1)
+            secIndex[secID] = idx
+
+            result, err = nqjson.Set(result, fmt.Sprintf("sections.%d.fields", idx), []interface{}{})
+            if err != nil {
+                panic(err)
+            }
+        }
+
+        // Strip nested details before storing field under the section
+        cleaned := fraw
+        cleaned, _ = nqjson.Delete(cleaned, "variableDetails")
+        cleaned, _ = nqjson.Delete(cleaned, "sectionDetails")
+
+        var err error
+        result, err = nqjson.Set(result, fmt.Sprintf("sections.%d.fields.-1", idx), cleaned)
+        if err != nil {
+            panic(err)
+        }
+    }
+
+    fmt.Println(string(result))
+    // Outputs grouped structure with variableDetails -> sections[] -> fields[]
+}
+
+// Same regrouping logic for arrays under "variables", but supports many variables (each with its own sections/fields).
+func groupVariablesWithNQJSON(input []byte) []byte {
+    result := []byte(`{"variables":[]}`)
+
+    // Track variable buckets and per-variable section buckets.
+    varIndex := map[string]int{}
+    secIndex := map[string]map[string]int{}
+
+    total := nqjson.Get(input, "variables.#").Int()
+
+    for i := int64(0); i < total; i++ {
+        field := nqjson.Get(input, fmt.Sprintf("variables.%d", i))
+        if !field.Exists() {
+            continue
+        }
+
+        fraw := []byte(field.Raw)
+
+        // Variable key (grouping parent). varIndex map keeps variables distinct; you could also
+        // precompute unique keys up front if desired (e.g., collect generatedId/manualId first).
+        varKey := nqjson.Get(fraw, "variableDetails.generatedId").String()
+        if varKey == "" {
+            varKey = nqjson.Get(fraw, "variableDetails.manualId").String()
+        }
+        if varKey == "" {
+            continue
+        }
+
+        // Create variable bucket if not seen
+        vIdx, ok := varIndex[varKey]
+        if !ok {
+            var err error
+            result, err = nqjson.Set(result, "variables.-1.variableDetails", []byte(nqjson.Get(fraw, "variableDetails").Raw))
+            if err != nil {
+                panic(err)
+            }
+            count := nqjson.Get(result, "variables.#").Int()
+            vIdx = int(count - 1)
+            varIndex[varKey] = vIdx
+            secIndex[varKey] = map[string]int{}
+            result, err = nqjson.Set(result, fmt.Sprintf("variables.%d.sections", vIdx), []interface{}{})
+            if err != nil {
+                panic(err)
+            }
+        }
+
+        // Section key inside that variable
+        secID := nqjson.Get(fraw, "sectionDetails.generatedId").String()
+        if secID == "" {
+            secID = nqjson.Get(fraw, "sectionDetails.manualId").String()
+        }
+        if secID == "" {
+            continue
+        }
+
+        sMap := secIndex[varKey]
+        sIdx, ok := sMap[secID]
+        if !ok {
+            var err error
+            result, err = nqjson.Set(result, fmt.Sprintf("variables.%d.sections.-1.sectionDetails", vIdx), []byte(nqjson.Get(fraw, "sectionDetails").Raw))
+            if err != nil {
+                panic(err)
+            }
+            count := nqjson.Get(result, fmt.Sprintf("variables.%d.sections.#", vIdx)).Int()
+            sIdx = int(count - 1)
+            sMap[secID] = sIdx
+            result, err = nqjson.Set(result, fmt.Sprintf("variables.%d.sections.%d.fields", vIdx, sIdx), []interface{}{})
+            if err != nil {
+                panic(err)
+            }
+        }
+
+        // Strip nested details before storing field under the section
+        cleaned := fraw
+        cleaned, _ = nqjson.Delete(cleaned, "variableDetails")
+        cleaned, _ = nqjson.Delete(cleaned, "sectionDetails")
+
+        var err error
+        result, err = nqjson.Set(result, fmt.Sprintf("variables.%d.sections.%d.fields.-1", vIdx, sIdx), cleaned)
+        if err != nil {
+            panic(err)
+        }
+    }
+
+    return result
+}
+
+// Build a map of variableDetails keyed by variable manualId (fallback to generatedId).
+// Output shape: {"variableDetailsMap": {"manualIdOrGeneratedId": { ...variableDetails... }, ...}}
+func variableDetailsMap(input []byte) []byte {
+    out := []byte(`{"variableDetailsMap":{}}`)
+    total := nqjson.Get(input, "variables.#").Int()
+
+    for i := int64(0); i < total; i++ {
+        vdet := nqjson.Get(input, fmt.Sprintf("variables.%d.variableDetails", i))
+        if !vdet.Exists() {
+            continue
+        }
+        key := nqjson.Get([]byte(vdet.Raw), "manualId").String()
+        if key == "" {
+            key = nqjson.Get([]byte(vdet.Raw), "generatedId").String()
+        }
+        if key == "" {
+            continue
+        }
+
+        // Set or overwrite with latest occurrence
+        var err error
+        out, err = nqjson.Set(out, fmt.Sprintf("variableDetailsMap.%s", key), []byte(vdet.Raw))
+        if err != nil {
+            panic(err)
+        }
+    }
+
+    return out
+}
+```
 ```
 
 ## Performance Optimizations
@@ -1010,6 +1237,113 @@ func escapeSequences() {
     // SET with escaped keys
     result, _ := nqjson.Set(json, `user\:config.language`, []byte(`"en"`))
     fmt.Println("Updated:", string(result))
+}
+
+// Escaping literal property names when both setting and getting.
+// Works for characters like '.', '@', '*', '#', ':', '|', '?', and '\\'.
+func escapeInSetAndGet() {
+    data := []byte(`{"config": {"foo.bar@baz": {"*weird#key": 1}}}`)
+
+    // Set using escaped path (dot and @ escaped). Same escapes work for Get.
+    updated, err := nqjson.Set(data, `config.foo\.bar\@baz.*weird#key`, 99)
+    if err != nil {
+        panic(err)
+    }
+
+    // Fetch the value back using the same escapes
+    val := nqjson.Get(updated, `config.foo\.bar\@baz.*weird#key`)
+    fmt.Println("Escaped value:", val.Int()) // 99
+
+    // Bracket form also accepts literal keys without escaping
+    val2 := nqjson.Get(updated, `config["foo.bar@baz"]["*weird#key"]`)
+    fmt.Println("Bracket form:", val2.Int()) // 99
+}
+
+func escapeWithHelper() {
+    data := []byte(`{"config": {"foo.bar@baz": {"*weird#key": 1}}}`)
+
+    // Build path without manual escaping using the library helper
+    path := nqjson.BuildEscapedPath("config", "foo.bar@baz", "*weird#key")
+
+    updated, err := nqjson.Set(data, path, 123)
+    if err != nil {
+        panic(err)
+    }
+
+    val := nqjson.Get(updated, path)
+    fmt.Println("Escaped via helper:", val.Int()) // 123
+
+    // Escape a single literal segment when composing paths manually
+    escapedKey := nqjson.EscapePathSegment("value|pipe")
+    fmt.Println("Escaped single segment:", escapedKey) // value\|pipe
+}
+```
+
+### Unicode and International Characters
+
+```go
+func unicodeKeysExample() {
+    // Unicode characters are preserved without escaping
+    json := []byte(`{}`)
+
+    // Set values with Unicode keys (Norwegian characters)
+    json, _ = nqjson.Set(json, "aaa_æåø", "Norwegian text")
+    
+    // Get value using the same Unicode key
+    result := nqjson.Get(json, "aaa_æåø")
+    fmt.Println("Value:", result.String()) // Norwegian text
+
+    // Unicode works in nested paths too
+    json, _ = nqjson.Set(json, "users.名前.value", "Japanese name")
+    name := nqjson.Get(json, "users.名前.value")
+    fmt.Println("Name:", name.String()) // Japanese name
+
+    // Use BuildEscapedPath with Unicode (no escaping needed for Unicode)
+    path := nqjson.BuildEscapedPath("data", "user_æøå", "info")
+    json, _ = nqjson.Set(json, path, "Scandinavian data")
+    fmt.Println("Path:", path) // data.user_æøå.info
+
+    // Combine Unicode with special characters that need escaping
+    mixedKey := "email@domain.com"  // Contains @ and .
+    escapedPath := nqjson.BuildEscapedPath("contacts", mixedKey)
+    json, _ = nqjson.Set(json, escapedPath, "contact info")
+    result = nqjson.Get(json, escapedPath)
+    fmt.Println("Contact:", result.String()) // contact info
+}
+```
+
+### Complete List of Escaped Characters
+
+The following characters require escaping in path segments:
+
+```go
+func allEscapedCharacters() {
+    // Characters that need escaping:
+    examples := map[string]string{
+        "backslash":    `key\value`,     // → key\\value
+        "dot":          "key.name",       // → key\.name
+        "colon":        "key:value",      // → key\:value
+        "pipe":         "key|value",      // → key\|value
+        "at":           "user@domain",    // → user\@domain
+        "asterisk":     "*wildcard",      // → \*wildcard
+        "question":     "what?",          // → what\?
+        "hash":         "#tag",           // → \#tag
+        "comma":        "a,b",            // → a\,b
+        "parens":       "func()",         // → func\(\)
+        "equals":       "a=b",            // → a\=b
+        "exclamation": "wow!",           // → wow\!
+        "comparison":   "a<b>c",          // → a\<b\>c
+        "tilde":        "~home",          // → \~home
+    }
+
+    for desc, key := range examples {
+        escaped := nqjson.EscapePathSegment(key)
+        fmt.Printf("%s: %s → %s\n", desc, key, escaped)
+    }
+
+    // Leading colon prefix is preserved (forces numeric keys as object properties)
+    numeric := nqjson.EscapePathSegment(":123")
+    fmt.Println("Numeric object key:", numeric) // :123 (not escaped)
 }
 ```
 

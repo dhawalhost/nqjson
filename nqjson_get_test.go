@@ -9599,6 +9599,84 @@ func TestHelperFunctions_Get(t *testing.T) {
 	})
 }
 
+func TestPathEscapeHelpers(t *testing.T) {
+	t.Run("escape_segment_literals", func(t *testing.T) {
+		tests := []struct {
+			name string
+			in   string
+			out  string
+		}{
+			{"dot_and_at", "foo.bar@baz", `foo\.bar\@baz`},
+			{"wildcards", "*key?#", `\*key\?\#`},
+			{"preserve_prefix_colon", ":0", `:0`},
+			{"embedded_colon", "foo:bar", `foo\:bar`},
+			{"backslash", `path\\value`, `path\\\\value`},
+		}
+
+		for _, tt := range tests {
+			if got := EscapePathSegment(tt.in); got != tt.out {
+				t.Errorf("EscapePathSegment(%q) = %q, want %q", tt.in, got, tt.out)
+			}
+		}
+	})
+
+	t.Run("build_and_use_escaped_paths", func(t *testing.T) {
+		data := []byte(`{"config":{"foo.bar@baz":{"*weird#key":1},"0":{"value":1},"value|pipe":7}}`)
+
+		path1 := BuildEscapedPath("config", "foo.bar@baz", "*weird#key")
+		updated, err := Set(data, path1, 99)
+		if err != nil {
+			t.Fatalf("Set with escaped path failed: %v", err)
+		}
+
+		path2 := BuildEscapedPath("config", ":0", "value")
+		path3 := BuildEscapedPath("config", "value|pipe")
+		updated, err = Set(updated, path3, 11)
+		if err != nil {
+			t.Fatalf("Set with escaped pipe path failed: %v", err)
+		}
+
+		if got := Get(updated, path1).Int(); got != 99 {
+			t.Fatalf("Get(%q) = %d, want 99", path1, got)
+		}
+		if got := Get(updated, path2).Int(); got != 1 {
+			t.Fatalf("Get(%q) = %d, want 1", path2, got)
+		}
+		if got := Get(updated, path3).Int(); got != 11 {
+			t.Fatalf("Get(%q) = %d, want 11", path3, got)
+		}
+	})
+
+	t.Run("unicode_key_preservation", func(t *testing.T) {
+		// Test that Unicode characters in keys are preserved without modification
+		data := []byte(`{}`)
+		unicodeKey := "aaa_æåø"
+		expectedValue := "test_value"
+
+		// Set a value with Unicode key
+		updated, err := Set(data, unicodeKey, expectedValue)
+		if err != nil {
+			t.Fatalf("Set with Unicode key failed: %v", err)
+		}
+
+		// Get the value back using the same Unicode key
+		result := Get(updated, unicodeKey)
+		if !result.Exists() {
+			t.Fatalf("Get(%q) did not find the key", unicodeKey)
+		}
+
+		if got := result.String(); got != expectedValue {
+			t.Fatalf("Get(%q) = %q, want %q", unicodeKey, got, expectedValue)
+		}
+
+		// Verify the JSON contains the exact Unicode key (not escaped)
+		jsonStr := string(updated)
+		if !strings.Contains(jsonStr, unicodeKey) {
+			t.Fatalf("JSON does not contain Unicode key %q as-is. Got: %s", unicodeKey, jsonStr)
+		}
+	})
+}
+
 // =============================================================================
 // PATH SYNTAX TESTS (from verify_compat_test.go)
 // =============================================================================

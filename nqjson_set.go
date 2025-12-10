@@ -3101,7 +3101,7 @@ func parseInt(s string) int {
 }
 
 // unescapePath unescapes special characters in a path segment
-// Supports: \. (literal dot), \: (literal colon), \\ (literal backslash)
+// Supports: \\ . : | @ * ? # , ( ) = ! < > ~
 // Example: "fav\.movie" -> "fav.movie"
 func unescapePath(s string) string {
 	if !strings.Contains(s, "\\") {
@@ -3114,8 +3114,8 @@ func unescapePath(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+1 < len(s) {
 			next := s[i+1]
-			// Only unescape \. \: and \\
-			if next == '.' || next == ':' || next == '\\' {
+			switch next {
+			case '.', ':', '\\', '|', '@', '*', '?', '#', ',', '(', ')', '=', '!', '<', '>', '~':
 				result.WriteByte(next)
 				i++ // Skip the escaped character
 				continue

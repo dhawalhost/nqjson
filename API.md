@@ -8,6 +8,7 @@ Complete API reference for the nqjson library.
 - [GET Operations](#get-operations)
 - [SET Operations](#set-operations)
 - [DELETE Operations](#delete-operations)
+- [Path Escape Utilities](#path-escape-utilities)
 - [Path Compilation](#path-compilation)
 - [Options and Configuration](#options-and-configuration)
 - [Error Types](#error-types)
@@ -324,6 +325,97 @@ Removes a value with advanced configuration options.
 **Returns:**
 - `[]byte`: The modified JSON
 - `error`: Error if the operation failed
+
+## Path Escape Utilities
+
+### `EscapePathSegment(segment string) string`
+
+Escapes special characters in a path segment to create a literal key name. This function ensures that keys containing special path characters (like `.`, `@`, `*`, etc.) are properly escaped for use in path expressions.
+
+**Parameters:**
+- `segment string`: The path segment to escape
+
+**Returns:**
+- `string`: The escaped segment with special characters prefixed with backslash
+
+**Escapes the following characters:**
+- `\` (backslash) → `\\`
+- `.` (dot) → `\.`
+- `:` (colon) → `\:` (unless it's a leading colon prefix)
+- `|` (pipe) → `\|`
+- `@` (at) → `\@`
+- `*` (asterisk) → `\*`
+- `?` (question mark) → `\?`
+- `#` (hash) → `\#`
+- `,` (comma) → `\,`
+- `(` (left parenthesis) → `\(`
+- `)` (right parenthesis) → `\)`
+- `=` (equals) → `\=`
+- `!` (exclamation) → `\!`
+- `<` (less than) → `\<`
+- `>` (greater than) → `\>`
+- `~` (tilde) → `\~`
+
+**Note:** Leading colon prefix (`:`) used to force numeric keys as object properties is preserved.
+
+**Example:**
+```go
+// Escape a key with special characters
+key := "foo.bar@baz"
+escaped := nqjson.EscapePathSegment(key)
+fmt.Println(escaped) // "foo\\.bar\\@baz"
+
+// Use in path expressions
+json := []byte(`{"config": {"foo.bar@baz": "value"}}`)
+result := nqjson.Get(json, "config."+escaped)
+fmt.Println(result.String()) // "value"
+
+// Numeric key as object property (colon prefix preserved)
+escaped := nqjson.EscapePathSegment(":123")
+fmt.Println(escaped) // ":123" (colon prefix not escaped)
+
+// Unicode characters are preserved
+escaped := nqjson.EscapePathSegment("aaa_æåø")
+fmt.Println(escaped) // "aaa_æåø" (no escaping needed)
+```
+
+### `BuildEscapedPath(segments ...string) string`
+
+Builds a complete path expression from multiple segments, automatically escaping special characters in each segment and joining them with dots.
+
+**Parameters:**
+- `segments ...string`: Variable number of path segments to escape and join
+
+**Returns:**
+- `string`: Complete path with all segments properly escaped and joined with `.`
+
+**Example:**
+```go
+// Build path from multiple segments with special characters
+path := nqjson.BuildEscapedPath("config", "foo.bar@baz", "*weird#key")
+fmt.Println(path) // "config.foo\\.bar\\@baz.\\*weird\\#key"
+
+// Use in Set/Get operations
+json := []byte(`{}`)
+json, _ = nqjson.Set(json, path, 42)
+value := nqjson.Get(json, path)
+fmt.Println(value.Int()) // 42
+
+// Numeric object keys with colon prefix
+path := nqjson.BuildEscapedPath("data", ":123", "value")
+fmt.Println(path) // "data.:123.value"
+
+// Unicode keys are preserved
+path := nqjson.BuildEscapedPath("users", "aaa_æåø", "name")
+fmt.Println(path) // "users.aaa_æåø.name"
+```
+
+**Use Cases:**
+1. **Dynamic keys from user input**: Safely use user-provided strings as JSON keys
+2. **Database field names**: Handle column names with special characters
+3. **Configuration keys**: Work with config keys containing dots or other special chars
+4. **API responses**: Navigate JSON with keys that contain path syntax characters
+5. **Internationalized keys**: Preserve Unicode characters in multi-language data
 
 ## Path Compilation
 

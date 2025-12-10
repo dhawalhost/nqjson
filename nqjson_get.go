@@ -150,7 +150,7 @@ func GetCached(data []byte, path string) Result {
 }
 
 // unescapePathGet unescapes special characters in a path segment for GET operations
-// Supports: \. (literal dot), \: (literal colon), \\ (literal backslash)
+// Supports: \\ . : | @ * ? # , ( ) = ! < > ~
 func unescapePathGet(s string) string {
 	if !strings.Contains(s, "\\") {
 		return s
@@ -162,7 +162,8 @@ func unescapePathGet(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+1 < len(s) {
 			next := s[i+1]
-			if next == '.' || next == ':' || next == '\\' {
+			switch next {
+			case '.', ':', '\\', '|', '@', '*', '?', '#', ',', '(', ')', '=', '!', '<', '>', '~':
 				result.WriteByte(next)
 				i++
 				continue
@@ -2434,6 +2435,14 @@ func parseModifiers(path string) ([]pathToken, string, string) {
 			continue
 		}
 
+		// Ignore escaped characters outside strings (treat \| and \@ as literals)
+		if c == '\\' {
+			if i+1 < len(path) {
+				i++
+				continue
+			}
+		}
+
 		switch c {
 		case '\'', '"':
 			inString = true
@@ -2521,6 +2530,28 @@ func splitModifierParts(s string) []string {
 	return parts
 }
 
+// isEscapedAt reports whether the character at position pos is escaped by a preceding backslash.
+func isEscapedAt(s string, pos int) bool {
+	if pos <= 0 || pos >= len(s) {
+		return false
+	}
+	count := 0
+	for i := pos - 1; i >= 0 && s[i] == '\\'; i-- {
+		count++
+	}
+	return count%2 == 1
+}
+
+// hasUnescapedChar reports if the target character appears unescaped in the string.
+func hasUnescapedChar(s string, target byte) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == target && !isEscapedAt(s, i) {
+			return true
+		}
+	}
+	return false
+}
+
 // isModifierName checks if a string is a known modifier name
 func isModifierName(s string) bool {
 	// Extract the base name before any ':'
@@ -2589,6 +2620,8 @@ func tokenizePath(path string) []pathToken {
 	var stringQuote byte
 	for i := 0; i < len(cleanPath); i++ {
 		c := cleanPath[i]
+		escaped := isEscapedAt(cleanPath, i)
+
 		if inString {
 			cur.WriteByte(c)
 			if c == '\\' { // escape next char
@@ -2598,7 +2631,7 @@ func tokenizePath(path string) []pathToken {
 				}
 				continue
 			}
-			if c == stringQuote {
+			if !escaped && c == stringQuote {
 				inString = false
 			}
 			continue
@@ -2606,24 +2639,32 @@ func tokenizePath(path string) []pathToken {
 
 		switch c {
 		case '\'', '"':
+			if escaped {
+				cur.WriteByte(c)
+				continue
+			}
 			inString = true
 			stringQuote = c
 			cur.WriteByte(c)
 			continue
 		case '[':
-			bracketDepth++
+			if !escaped {
+				bracketDepth++
+			}
 		case ']':
-			if bracketDepth > 0 {
+			if !escaped && bracketDepth > 0 {
 				bracketDepth--
 			}
 		case '(':
-			parenDepth++
+			if !escaped {
+				parenDepth++
+			}
 		case ')':
-			if parenDepth > 0 {
+			if !escaped && parenDepth > 0 {
 				parenDepth--
 			}
 		case '.':
-			if bracketDepth == 0 && parenDepth == 0 {
+			if !escaped && bracketDepth == 0 && parenDepth == 0 {
 				parts = append(parts, cur.String())
 				cur.Reset()
 				continue
@@ -2640,38 +2681,40 @@ func tokenizePath(path string) []pathToken {
 			continue
 		}
 
-		if part == "*" {
+		unescaped := unescapePathGet(part)
+
+		if unescaped == "*" && part == "*" {
 			tokens = append(tokens, pathToken{kind: tokenWildcard})
 			continue
 		}
 
-		if part == "#" {
+		if unescaped == "#" && part == "#" {
 			// # is used for array length/count or array wildcard depending on context
 			tokens = append(tokens, pathToken{kind: tokenArrayLength})
 			continue
 		}
 
 		// Check for query syntax: #(condition) or #(condition)#
-		if strings.HasPrefix(part, "#(") {
-			queryTokens := parseQueryExpression(part)
+		if strings.HasPrefix(unescaped, "#(") {
+			queryTokens := parseQueryExpression(unescaped)
 			tokens = append(tokens, queryTokens...)
 			continue
 		}
 
-		if part == ".." {
+		if unescaped == ".." {
 			tokens = append(tokens, pathToken{kind: tokenRecursive})
 			continue
 		}
 
 		// Check for array access
-		if strings.HasSuffix(part, "]") && strings.Contains(part, "[") {
-			arrayTokens := parseArrayAccess(part)
+		if strings.HasSuffix(unescaped, "]") && strings.Contains(unescaped, "[") {
+			arrayTokens := parseArrayAccess(unescaped)
 			tokens = append(tokens, arrayTokens...)
-		} else if idx, err := strconv.Atoi(part); err == nil && idx >= 0 {
+		} else if idx, err := strconv.Atoi(unescaped); err == nil && idx >= 0 {
 			// Pure numeric token - treat as array index
 			tokens = append(tokens, pathToken{kind: tokenIndex, num: idx})
 		} else {
-			tokens = append(tokens, pathToken{kind: tokenKey, str: part})
+			tokens = append(tokens, pathToken{kind: tokenKey, str: unescaped})
 		}
 	}
 
@@ -2876,64 +2919,70 @@ func executeTokenizedPath(data []byte, tokens []pathToken) Result {
 	// Start with the root value
 	current := Parse(data)
 
-	// Separate tokens into: before modifiers, modifiers, after modifiers
-	pathTokens, modifiers, afterModTokens := separateModifierTokens(tokens)
+	// Split tokens into before/modifiers/after blocks
+	before, modifiers, after := separateModifierTokens(tokens)
 	hasModifiers := len(modifiers) > 0
 
 	// Process tokens before modifiers
-	for i, token := range pathTokens {
-		result, shouldReturn := processPathToken(current, token, pathTokens, i, hasModifiers)
+	for i, token := range before {
+		result, shouldReturn := processPathToken(current, token, before, i, hasModifiers)
 		if shouldReturn {
-			// Use the result and stop processing more tokens; modifiers will be applied below
 			current = result
 			break
 		}
 		current = result
-
 		if !current.Exists() {
 			return Result{Type: TypeUndefined}
 		}
 	}
 
 	// Apply modifiers if any
-	if hasModifiers {
+	if len(modifiers) > 0 {
 		current = applyModifiersToResult(current, modifiers)
-	}
-
-	// Process tokens after modifiers (e.g., "0" in "children|@reverse|0")
-	for i, token := range afterModTokens {
-		result, shouldReturn := processPathToken(current, token, afterModTokens, i, false)
-		if shouldReturn {
-			current = result
-			break
-		}
-		current = result
-
 		if !current.Exists() {
 			return Result{Type: TypeUndefined}
+		}
+	}
+
+	// Process tokens after modifiers (if any)
+	if len(after) > 0 {
+		for i, token := range after {
+			result, shouldReturn := processPathToken(current, token, after, i, false)
+			if shouldReturn {
+				current = result
+				break
+			}
+			current = result
+			if !current.Exists() {
+				return Result{Type: TypeUndefined}
+			}
 		}
 	}
 
 	return current
 }
 
-// separateModifierTokens separates path tokens into: tokens before modifiers, modifiers, tokens after modifiers
-func separateModifierTokens(tokens []pathToken) (beforeMod []pathToken, modifiers []pathToken, afterMod []pathToken) {
+// separateModifierTokens splits tokens into before modifiers, modifier tokens, and after modifiers.
+func separateModifierTokens(tokens []pathToken) ([]pathToken, []pathToken, []pathToken) {
+	var before []pathToken
+	var modifiers []pathToken
+	var after []pathToken
+
 	foundModifier := false
 	for _, token := range tokens {
 		if token.kind == tokenModifier {
 			foundModifier = true
 			modifiers = append(modifiers, token)
-		} else if foundModifier {
-			// This token comes after the modifiers
-			afterMod = append(afterMod, token)
+			continue
+		}
+		if foundModifier {
+			after = append(after, token)
 		} else {
-			// This token comes before any modifier
-			beforeMod = append(beforeMod, token)
+			before = append(before, token)
 		}
 	}
 
-	return beforeMod, modifiers, afterMod
+	return before, modifiers, after
 }
 
 // processPathToken processes a single path token and returns the result and whether to return early
@@ -5346,6 +5395,11 @@ func (r Result) Int() int64 {
 func (r Result) Uint() uint64 {
 	switch r.Type {
 	case TypeNumber:
+		if len(r.Raw) > 0 {
+			if n, err := strconv.ParseUint(strings.TrimSpace(string(r.Raw)), 10, 64); err == nil {
+				return n
+			}
+		}
 		return uint64(r.Num)
 	case TypeString:
 		n, _ := strconv.ParseUint(r.Str, 10, 64)

@@ -19,7 +19,9 @@
 - **Wildcards** - Multi-char `*` and single-char `?` wildcards: `child*.name`, `item?.value`
 - **Path Caching** - 2-5x speedup with `GetCached()` for hot paths
 - **JSON Lines Support** - Native newline-delimited JSON processing with `..#`
-- **Escape Sequences** - Access keys with dots/colons: `fav\.movie`, `user\:name`
+- **Path Escape Helpers** - Auto-escape special characters: `BuildEscapedPath()`, `EscapePathSegment()`
+- **Escape Sequences** - Manual escaping for keys with dots/colons: `fav\.movie`, `user\:name`
+- **Unicode Support** - Full UTF-8 support, Unicode keys work without escaping: `user_æøå`
 - **Complete CRUD** - GET, SET, DELETE with atomic operations
 
 ### 💪 **Production Ready**
@@ -307,6 +309,37 @@ fmt.Println(expensive.String())  // ["Laptop","Monitor"]
 totalValue := nqjson.Get(json, "products.#.price|@sum")
 fmt.Println("Total:", totalValue.Float())  // 1398
 ```
+
+### Path Escaping for Special Characters
+
+```go
+// When keys contain special characters (., @, *, etc.), use escape helpers
+json := []byte(`{}`)
+
+// Automatic escaping with BuildEscapedPath
+path := nqjson.BuildEscapedPath("config", "user@domain.com", "settings")
+json, _ = nqjson.Set(json, path, "active")
+result := nqjson.Get(json, path)
+fmt.Println(result.String())  // "active"
+
+// Escape individual segments
+key := nqjson.EscapePathSegment("file.name")  // Returns: file\.name
+json, _ = nqjson.Set(json, "data." + key, "document.pdf")
+
+// Unicode characters work without escaping
+json, _ = nqjson.Set(json, "user_æøå", "Norwegian data")
+result = nqjson.Get(json, "user_æøå")
+fmt.Println(result.String())  // "Norwegian data"
+
+// Numeric keys as object properties (use : prefix)
+json, _ = nqjson.Set(json, "data.:123", "numeric key")
+result = nqjson.Get(json, "data.:123")
+```
+
+**Special characters that require escaping:**  
+`\ . : | @ * ? # , ( ) = ! < > ~`
+
+**Note:** Leading colon (`:`) for numeric object keys is preserved. Unicode characters never need escaping.
 
 ## 📖 API Reference
 
