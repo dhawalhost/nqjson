@@ -15,7 +15,7 @@
 ### 🎯 **Powerful Features**
 - **Multipath Queries** - Get multiple values in one call: `user.name,user.email,user.age`
 - **Query Syntax** - Powerful array filtering: `#(age>30)` (first match), `#(age>30)#` (all matches)
-- **20+ Modifiers** - `@reverse`, `@sort`, `@sum`, `@avg`, `@min`, `@max`, `@pretty`, `@ugly`, `@valid`, `@this`, and more
+- **25+ Modifiers** - `@reverse`, `@sort`, `@sortby`, `@group`, `@map`, `@uniqueby`, `@sum`, `@avg`, `@min`, `@max`, `@pretty`, `@ugly`, `@valid`, `@this`, and more
 - **Wildcards** - Multi-char `*` and single-char `?` wildcards: `child*.name`, `item?.value`
 - **Path Caching** - 2-5x speedup with `GetCached()` for hot paths
 - **JSON Lines Support** - Native newline-delimited JSON processing with `..#`
@@ -44,9 +44,11 @@ totals := nqjson.Get(json, "orders.#.amount|@sum")      // Sum all amounts
 average := nqjson.Get(json, "ratings.#.score|@avg")     // Average rating
 highest := nqjson.Get(json, "products.#.price|@max")    // Highest price
 
-// Array transformations
-unique := nqjson.Get(json, "tags|@distinct|@sort")      // Unique sorted tags
-sorted := nqjson.Get(json, "items.#.name|@sort")        // Alphabetically sorted names
+// Advanced transformations (jq-style)
+grouped := nqjson.Get(json, "users|@group:city")        // Group by city
+sorted := nqjson.Get(json, "users|@sortby:age")         // Sort objects by age
+projected := nqjson.Get(json, "users|@map:name;email")  // Project specific fields
+unique := nqjson.Get(json, "users|@uniqueby:dept")      // Unique by department
 ```
 
 ### 🔍 Flexible Path Expressions
@@ -122,6 +124,12 @@ flattened := nqjson.Get(json, "nested.arrays|@flatten")
 keys := nqjson.Get(json, "user|@keys")                  // Object keys
 values := nqjson.Get(json, "user|@values")              // Object values
 
+// Advanced transformations for object arrays
+grouped := nqjson.Get(json, "users|@group:city")         // Group by field
+sortedBy := nqjson.Get(json, "users|@sortby:age")        // Sort objects by field
+mapped := nqjson.Get(json, "users|@map:name;email")      // Project fields (use ; separator)
+uniqueBy := nqjson.Get(json, "users|@uniqueby:dept")     // Unique by field
+
 // Modifier chaining with path continuation
 firstReversed := nqjson.Get(json, "children|@reverse|0") // First of reversed
 
@@ -130,6 +138,17 @@ pretty := nqjson.Get(json, "@pretty")                    // Pretty print
 ugly := nqjson.Get(json, "@ugly")                        // Minify
 valid := nqjson.Get(json, "@valid")                      // Validate JSON
 identity := nqjson.Get(json, "@this")                    // Return unchanged
+
+// jq-style utility modifiers
+sliced := nqjson.Get(json, "items|@slice:1:3")           // Slice array [1:3)
+hasField := nqjson.Get(json, "user|@has:email")          // Check field exists
+contains := nqjson.Get(json, "tags|@contains:urgent")    // Array/string contains
+split := nqjson.Get(json, "path|@split:/")               // Split string
+startsWith := nqjson.Get(json, "name|@startswith:Dr.")   // String prefix check
+entries := nqjson.Get(json, "config|@entries")           // Object → [{key,value}]
+fromEntries := nqjson.Get(json, "pairs|@fromentries")    // [{key,value}] → Object
+anyTrue := nqjson.Get(json, "flags|@any")                // Any element truthy
+allTrue := nqjson.Get(json, "flags|@all")                // All elements truthy
 ```
 
 ### ⚡ Performance Optimization

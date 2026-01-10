@@ -204,6 +204,64 @@ for i, result := range results {
 
 Alias for `GetMany()` for consistency.
 
+## Custom Modifiers
+
+nqjson supports registering custom modifiers that can be used in queries.
+
+### `RegisterModifier(name string, fn ModifierFunc)`
+
+Registers a custom modifier with the given name. The modifier can be used in queries with `@name` or `@name:arg` syntax.
+
+**Parameters:**
+- `name string`: The modifier name (without @ prefix)
+- `fn ModifierFunc`: The modifier function
+
+**Example:**
+```go
+// Register a custom modifier that doubles numeric values
+nqjson.RegisterModifier("double", func(r nqjson.Result, arg string) nqjson.Result {
+    if r.Type == nqjson.TypeNumber {
+        return nqjson.Result{Type: nqjson.TypeNumber, Num: r.Num * 2}
+    }
+    return r
+})
+
+// Use the custom modifier
+result := nqjson.Get(json, "price|@double")
+fmt.Println(result.Float()) // 200 if price was 100
+```
+
+### `UnregisterModifier(name string) bool`
+
+Removes a custom modifier by name.
+
+**Returns:**
+- `bool`: True if the modifier was found and removed
+
+**Example:**
+```go
+removed := nqjson.UnregisterModifier("double")
+fmt.Println(removed) // true
+```
+
+### `ListModifiers() []string`
+
+Returns a list of all registered modifier names (built-in and custom).
+
+**Example:**
+```go
+modifiers := nqjson.ListModifiers()
+fmt.Printf("Available modifiers: %d\n", len(modifiers)) // 54+
+```
+
+### ModifierFunc Type
+
+```go
+type ModifierFunc func(result Result, arg string) Result
+```
+
+The function receives the current `Result` and an optional argument string, and returns a transformed `Result`.
+
 ## SET Operations
 
 ### `Set(json []byte, path string, value interface{}) ([]byte, error)`
@@ -325,6 +383,47 @@ Removes a value with advanced configuration options.
 **Returns:**
 - `[]byte`: The modified JSON
 - `error`: Error if the operation failed
+
+### `DeleteMany(json []byte, paths ...string) ([]byte, error)`
+
+Removes values at multiple paths in a single operation. Silently skips paths that don't exist.
+
+**Example:**
+```go
+result, err := nqjson.DeleteMany(json, "debug", "temp", "cache")
+```
+
+### `Increment(json []byte, path string, delta float64) ([]byte, error)`
+
+Adds a delta to a numeric value. Returns error if path doesn't exist or value is not a number.
+
+**Example:**
+```go
+result, err := nqjson.Increment(json, "count", 1)    // count += 1
+result, err = nqjson.Increment(json, "score", 10.5) // score += 10.5
+result, err = nqjson.Increment(json, "count", -5)   // count -= 5
+```
+
+### `IncrementInt(json []byte, path string, delta int) ([]byte, error)`
+
+Convenience wrapper for integer increments.
+
+### `Decrement(json []byte, path string, delta float64) ([]byte, error)`
+
+Subtracts a delta from a numeric value. Equivalent to `Increment(json, path, -delta)`.
+
+### `SetMany(json []byte, pathValues ...interface{}) ([]byte, error)`
+
+Sets multiple path-value pairs in a single operation.
+
+**Example:**
+```go
+result, err := nqjson.SetMany(json,
+    "name", "John",
+    "age", 30,
+    "active", true,
+)
+```
 
 ## Path Escape Utilities
 
@@ -605,6 +704,12 @@ Use the pipe `|` syntax to apply modifiers to results:
 - `items|@first` - Get first element
 - `items|@last` - Get last element
 
+#### Advanced Transformation Modifiers (for object arrays)
+- `users|@sortby:age` - Sort objects by field
+- `users|@group:city` or `@groupby:city` - Group objects by field, returns `{"NYC":[...], "Boston":[...]}`
+- `users|@map:name;email` - Project specific fields (use `;` separator)
+- `users|@uniqueby:city` - Unique objects by field
+
 #### Object Modifiers
 - `user|@keys` - Get object keys as array
 - `user|@values` - Get object values as array
@@ -633,6 +738,18 @@ Use the pipe `|` syntax to apply modifiers to results:
 - `value|@upper` - Convert string to uppercase
 - `value|@type` - Get JSON type as string
 - `tags|@join` or `@join:","` - Join array elements to string
+
+#### jq-Style Utility Modifiers
+- `items|@slice:1:3` - Array slicing (start:end, supports negative indices)
+- `obj|@has:field` - Check if object has field (returns boolean)
+- `tags|@contains:value` - Check if array/string contains value
+- `str|@split:delim` - Split string by delimiter into array
+- `str|@startswith:prefix` - Check if string starts with prefix
+- `str|@endswith:suffix` - Check if string ends with suffix
+- `obj|@entries` or `@toentries` - Convert object to `[{key, value}]` array
+- `array|@fromentries` - Convert `[{key, value}]` array to object
+- `bools|@any` - True if any element is truthy
+- `bools|@all` - True if all elements are truthy
 
 #### Modifier Chaining
 - `items|@sort|@reverse` - Sort descending (sort then reverse)

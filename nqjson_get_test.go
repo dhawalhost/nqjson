@@ -10291,3 +10291,262 @@ func TestResult_Less(t *testing.T) {
 		})
 	}
 }
+
+// ==================== CUSTOM MODIFIER TESTS ====================
+
+func TestCustomModifiers(t *testing.T) {
+	tests := []struct {
+		name         string
+		modifierName string
+		modifierFn   ModifierFunc
+		json         string
+		path         string
+		wantStr      string
+		wantNum      float64
+		checkType    string // "num" or "str"
+	}{
+		{
+			name:         "double_number",
+			modifierName: "testdouble",
+			modifierFn: func(r Result, arg string) Result {
+				if r.Type == TypeNumber {
+					return Result{Type: TypeNumber, Num: r.Num * 2, Modified: true}
+				}
+				return r
+			},
+			json:      `{"price": 50}`,
+			path:      "price|@testdouble",
+			wantNum:   100,
+			checkType: "num",
+		},
+		{
+			name:         "prefix_string",
+			modifierName: "testprefix",
+			modifierFn: func(r Result, arg string) Result {
+				if r.Type == TypeString && arg != "" {
+					newStr := arg + r.Str
+					return Result{Type: TypeString, Str: newStr, Raw: []byte(`"` + newStr + `"`), Modified: true}
+				}
+				return r
+			},
+			json:      `{"name": "Widget"}`,
+			path:      "name|@testprefix:ITEM_",
+			wantStr:   "ITEM_Widget",
+			checkType: "str",
+		},
+		{
+			name:         "triple_number",
+			modifierName: "testtriple",
+			modifierFn: func(r Result, arg string) Result {
+				if r.Type == TypeNumber {
+					return Result{Type: TypeNumber, Num: r.Num * 3, Modified: true}
+				}
+				return r
+			},
+			json:      `{"value": 10}`,
+			path:      "value|@testtriple",
+			wantNum:   30,
+			checkType: "num",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			RegisterModifier(tt.modifierName, tt.modifierFn)
+			defer UnregisterModifier(tt.modifierName)
+
+			result := Get([]byte(tt.json), tt.path)
+
+			if tt.checkType == "num" && result.Num != tt.wantNum {
+				t.Errorf("Expected %.0f, got %.0f", tt.wantNum, result.Num)
+			}
+			if tt.checkType == "str" && result.Str != tt.wantStr {
+				t.Errorf("Expected %s, got %s", tt.wantStr, result.Str)
+			}
+		})
+	}
+}
+
+func TestCustomModifier_UnregisterLifecycle(t *testing.T) {
+	RegisterModifier("testremove", func(r Result, arg string) Result {
+		return Result{Type: TypeString, Str: "modified", Modified: true}
+	})
+
+	json := []byte(`{"value": "original"}`)
+
+	// Before unregister
+	result := Get(json, "value|@testremove")
+	if result.Str != "modified" {
+		t.Errorf("Expected modified, got %s", result.Str)
+	}
+
+	// Unregister
+	if !UnregisterModifier("testremove") {
+		t.Error("Expected true for removed modifier")
+	}
+
+	// After unregister
+	result = Get(json, "value|@testremove")
+	if result.Str != "original" {
+		t.Errorf("Expected original after unregister, got %s", result.Str)
+	}
+
+	// Unregister again
+	if UnregisterModifier("testremove") {
+		t.Error("Expected false for already removed modifier")
+	}
+}
+
+func TestCustomModifier_ListModifiers(t *testing.T) {
+	initial := len(ListModifiers())
+	RegisterModifier("testlist", func(r Result, arg string) Result { return r })
+	defer UnregisterModifier("testlist")
+
+	if len(ListModifiers()) != initial+1 {
+		t.Errorf("Expected %d modifiers, got %d", initial+1, len(ListModifiers()))
+	}
+}
+
+// ==================== JQ-STYLE MODIFIER TESTS ====================
+
+func TestJQStyleModifiers(t *testing.T) {
+	tests := []struct {
+		name     string
+		json     string
+		path     string
+		wantBool bool
+		wantNum  float64
+		wantStr  string
+		wantLen  int
+		check    string // "bool", "num", "str", "len"
+	}{
+		// @has modifier
+		{"has_existing_field", `{"user": {"name": "Alice"}}`, "user|@has:name", true, 0, "", 0, "bool"},
+		{"has_missing_field", `{"user": {"name": "Alice"}}`, "user|@has:phone", false, 0, "", 0, "bool"},
+
+		// @contains modifier
+		{"contains_array_hit", `{"tags": ["go", "json", "fast"]}`, "tags|@contains:json", true, 0, "", 0, "bool"},
+		{"contains_array_miss", `{"tags": ["go", "json", "fast"]}`, "tags|@contains:python", false, 0, "", 0, "bool"},
+		{"contains_string_hit", `{"msg": "Hello, World!"}`, "msg|@contains:World", true, 0, "", 0, "bool"},
+		{"contains_string_miss", `{"msg": "Hello, World!"}`, "msg|@contains:xyz", false, 0, "", 0, "bool"},
+
+		// @startswith modifier
+		{"startswith_hit", `{"url": "https://example.com"}`, "url|@startswith:https", true, 0, "", 0, "bool"},
+		{"startswith_miss", `{"url": "https://example.com"}`, "url|@startswith:http:", false, 0, "", 0, "bool"},
+
+		// @endswith modifier
+		{"endswith_hit", `{"file": "document.pdf"}`, "file|@endswith:.pdf", true, 0, "", 0, "bool"},
+		{"endswith_miss", `{"file": "document.pdf"}`, "file|@endswith:.doc", false, 0, "", 0, "bool"},
+
+		// @any modifier
+		{"any_true", `{"flags": [false, true, false]}`, "flags|@any", true, 0, "", 0, "bool"},
+		{"any_false", `{"flags": [false, false, false]}`, "flags|@any", false, 0, "", 0, "bool"},
+
+		// @all modifier
+		{"all_true", `{"flags": [true, true, true]}`, "flags|@all", true, 0, "", 0, "bool"},
+		{"all_false", `{"flags": [true, false, true]}`, "flags|@all", false, 0, "", 0, "bool"},
+
+		// @split modifier
+		{"split_path", `{"path": "a/b/c/d"}`, "path|@split:/", false, 0, "", 4, "len"},
+
+		// @slice modifier
+		{"slice_basic", `{"items": [0, 1, 2, 3, 4, 5]}`, "items|@slice:1:4", false, 0, "", 3, "len"},
+		{"slice_negative", `{"items": [0, 1, 2, 3, 4, 5]}`, "items|@slice:-2", false, 0, "", 2, "len"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+
+			switch tt.check {
+			case "bool":
+				if result.Bool() != tt.wantBool {
+					t.Errorf("Expected %v, got %v", tt.wantBool, result.Bool())
+				}
+			case "num":
+				if result.Num != tt.wantNum {
+					t.Errorf("Expected %.2f, got %.2f", tt.wantNum, result.Num)
+				}
+			case "str":
+				if result.Str != tt.wantStr {
+					t.Errorf("Expected %s, got %s", tt.wantStr, result.Str)
+				}
+			case "len":
+				arr := result.Array()
+				if len(arr) != tt.wantLen {
+					t.Errorf("Expected length %d, got %d", tt.wantLen, len(arr))
+				}
+			}
+		})
+	}
+}
+
+func TestJQStyleModifiers_Entries(t *testing.T) {
+	json := []byte(`{"a": 1, "b": 2}`)
+	result := Get(json, "@entries")
+	arr := result.Array()
+
+	if len(arr) < 2 {
+		t.Errorf("Expected at least 2 entries, got %d", len(arr))
+	}
+
+	for _, entry := range arr {
+		key := Get(entry.Raw, "key")
+		value := Get(entry.Raw, "value")
+		if !key.Exists() || !value.Exists() {
+			t.Error("Entry should have key and value")
+		}
+	}
+}
+
+func TestJQStyleModifiers_FromEntries(t *testing.T) {
+	json := []byte(`[{"key": "name", "value": "Alice"}, {"key": "age", "value": 30}]`)
+	result := Get(json, "@fromentries")
+
+	name := Get(result.Raw, "name")
+	age := Get(result.Raw, "age")
+
+	if name.Str != "Alice" {
+		t.Errorf("Expected Alice, got %s", name.Str)
+	}
+	if age.Num != 30 {
+		t.Errorf("Expected 30, got %.0f", age.Num)
+	}
+}
+
+// ==================== FAST-PATH AGGREGATE TESTS ====================
+
+func TestAggregateModifiersFastPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		wantNum float64
+	}{
+		// @sum
+		{"sum_integers", `[1, 2, 3, 4, 5]`, "@sum", 15},
+		{"sum_floats", `[1.5, 2.5, 3.0, 4.0]`, "@sum", 11},
+		{"sum_nested", `{"data": {"numbers": [10, 20, 30]}}`, "data.numbers|@sum", 60},
+
+		// @avg
+		{"avg_integers", `[10, 20, 30, 40, 50]`, "@avg", 30},
+		{"avg_floats", `[1.5, 2.5, 3.0, 4.0]`, "@avg", 2.75},
+
+		// @min
+		{"min_integers", `[5, 3, 9, 1, 7]`, "@min", 1},
+		{"min_negatives", `[-5, -3, -9, -1, -7]`, "@min", -9},
+
+		// @max
+		{"max_integers", `[5, 3, 9, 1, 7]`, "@max", 9},
+		{"max_negatives", `[-5, -3, -9, -1, -7]`, "@max", -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Get([]byte(tt.json), tt.path)
+			if result.Num != tt.wantNum {
+				t.Errorf("Expected %.2f, got %.2f", tt.wantNum, result.Num)
+			}
+		})
+	}
+}

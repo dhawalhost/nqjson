@@ -1815,3 +1815,147 @@ func TestCombinedEscapeAndColon_Set(t *testing.T) {
 		})
 	}
 }
+
+// ==================== SET HELPER TESTS ====================
+
+func TestSetHelpers_IncrementDecrement(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		delta   float64
+		deltaI  int
+		fn      string // "increment", "incrementInt", "decrement", "decrementInt"
+		wantNum float64
+	}{
+		// Increment tests
+		{"increment_int", `{"count": 10}`, "count", 5, 0, "increment", 15},
+		{"increment_float", `{"price": 99.5}`, "price", 0.5, 0, "increment", 100},
+		{"incrementInt", `{"views": 1000}`, "views", 0, 50, "incrementInt", 1050},
+
+		// Decrement tests
+		{"decrement_int", `{"stock": 100}`, "stock", 15, 0, "decrement", 85},
+		{"decrementInt", `{"balance": 500}`, "balance", 0, 75, "decrementInt", 425},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result []byte
+			var err error
+
+			switch tt.fn {
+			case "increment":
+				result, err = Increment([]byte(tt.json), tt.path, tt.delta)
+			case "incrementInt":
+				result, err = IncrementInt([]byte(tt.json), tt.path, tt.deltaI)
+			case "decrement":
+				result, err = Decrement([]byte(tt.json), tt.path, tt.delta)
+			case "decrementInt":
+				result, err = DecrementInt([]byte(tt.json), tt.path, tt.deltaI)
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			got := Get(result, tt.path).Num
+			if got != tt.wantNum {
+				t.Errorf("Expected %.0f, got %.0f", tt.wantNum, got)
+			}
+		})
+	}
+}
+
+func TestSetHelpers_DeleteMany(t *testing.T) {
+	tests := []struct {
+		name        string
+		json        string
+		deletePaths []string
+		wantDeleted []string
+		wantKept    []string
+	}{
+		{
+			name:        "delete_multiple",
+			json:        `{"a": 1, "b": 2, "c": 3, "d": 4}`,
+			deletePaths: []string{"a", "c"},
+			wantDeleted: []string{"a", "c"},
+			wantKept:    []string{"b", "d"},
+		},
+		{
+			name:        "delete_with_nonexistent",
+			json:        `{"a": 1}`,
+			deletePaths: []string{"nonexistent", "a", "alsononexistent"},
+			wantDeleted: []string{"a"},
+			wantKept:    []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := DeleteMany([]byte(tt.json), tt.deletePaths...)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			for _, path := range tt.wantDeleted {
+				if Get(result, path).Exists() {
+					t.Errorf("Expected '%s' to be deleted", path)
+				}
+			}
+			for _, path := range tt.wantKept {
+				if !Get(result, path).Exists() {
+					t.Errorf("Expected '%s' to remain", path)
+				}
+			}
+		})
+	}
+}
+
+func TestSetHelpers_SetMany(t *testing.T) {
+	t.Run("SetMany_bytes", func(t *testing.T) {
+		json := []byte(`{"user": {"name": "Alice"}}`)
+		result, err := SetMany(json, "user.age", 30, "user.city", "NYC", "user.active", true)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		checks := map[string]interface{}{
+			"user.name":   "Alice",
+			"user.age":    float64(30),
+			"user.city":   "NYC",
+			"user.active": true,
+		}
+		for path, want := range checks {
+			r := Get(result, path)
+			switch v := want.(type) {
+			case string:
+				if r.Str != v {
+					t.Errorf("%s: expected %s, got %s", path, v, r.Str)
+				}
+			case float64:
+				if r.Num != v {
+					t.Errorf("%s: expected %.0f, got %.0f", path, v, r.Num)
+				}
+			case bool:
+				if r.Bool() != v {
+					t.Errorf("%s: expected %v, got %v", path, v, r.Bool())
+				}
+			}
+		}
+	})
+
+	t.Run("SetManyString", func(t *testing.T) {
+		json := `{"config": {}}`
+		result, err := SetManyString(json, "config.debug", true, "config.port", 8080)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if Get([]byte(result), "config.debug").Bool() != true {
+			t.Error("Debug should be true")
+		}
+		if Get([]byte(result), "config.port").Num != 8080 {
+			t.Error("Port should be 8080")
+		}
+	})
+}

@@ -356,6 +356,120 @@ func DeleteString(json string, path string) (string, error) {
 	return string(result), nil
 }
 
+// Increment adds a delta to the numeric value at the specified path.
+// Returns error if the path doesn't exist or value is not a number.
+// This is equivalent to jq's `.path += delta`
+func Increment(json []byte, path string, delta float64) ([]byte, error) {
+	// Get current value
+	result := Get(json, path)
+	if !result.Exists() {
+		return json, ErrPathNotFound
+	}
+
+	// Check if it's a number
+	if result.Type != TypeNumber {
+		return json, ErrTypeMismatch
+	}
+
+	// Calculate new value
+	newValue := result.Num + delta
+
+	// Set the new value
+	return Set(json, path, newValue)
+}
+
+// IncrementInt is a convenience wrapper that adds an integer delta
+func IncrementInt(json []byte, path string, delta int) ([]byte, error) {
+	return Increment(json, path, float64(delta))
+}
+
+// Decrement subtracts a delta from the numeric value at the specified path.
+// This is equivalent to jq's `.path -= delta`
+func Decrement(json []byte, path string, delta float64) ([]byte, error) {
+	return Increment(json, path, -delta)
+}
+
+// DecrementInt is a convenience wrapper that subtracts an integer delta
+func DecrementInt(json []byte, path string, delta int) ([]byte, error) {
+	return Increment(json, path, -float64(delta))
+}
+
+// DeleteMany removes values at multiple paths.
+// This is equivalent to jq's `delpaths([[path1], [path2], ...])`
+// Returns the modified JSON after all deletions.
+func DeleteMany(json []byte, paths ...string) ([]byte, error) {
+	if len(paths) == 0 {
+		return json, nil
+	}
+
+	result := json
+	var err error
+
+	for _, path := range paths {
+		result, err = Delete(result, path)
+		if err != nil {
+			// Skip paths that don't exist or had no change (like jq does)
+			if err == ErrPathNotFound || err == ErrNoChange {
+				continue
+			}
+			return json, err
+		}
+	}
+
+	return result, nil
+}
+
+// SetMany sets multiple path-value pairs in a single operation.
+// Arguments must be provided as path, value pairs.
+// Returns error if odd number of arguments is provided.
+//
+// Example:
+//
+//	result, _ := nqjson.SetMany(json,
+//	    "name", "John",
+//	    "age", 30,
+//	    "active", true,
+//	)
+func SetMany(json []byte, pathValues ...interface{}) ([]byte, error) {
+	if len(pathValues) == 0 {
+		return json, nil
+	}
+
+	// Must have even number of arguments (path-value pairs)
+	if len(pathValues)%2 != 0 {
+		return json, errors.New("SetMany requires path-value pairs (even number of arguments)")
+	}
+
+	result := json
+	var err error
+
+	for i := 0; i < len(pathValues); i += 2 {
+		// Path must be a string
+		path, ok := pathValues[i].(string)
+		if !ok {
+			return json, errors.New("path must be a string")
+		}
+
+		value := pathValues[i+1]
+
+		result, err = Set(result, path, value)
+		if err != nil {
+			return json, err
+		}
+	}
+
+	return result, nil
+}
+
+// SetManyString is like SetMany but works with string JSON
+func SetManyString(json string, pathValues ...interface{}) (string, error) {
+	result, err := SetMany([]byte(json), pathValues...)
+	if err != nil {
+		return json, err
+	}
+	return string(result), nil
+}
+
 // isSimpleSetPath checks if a path can be processed without compilation
 func isSimpleSetPath(path string) bool {
 	// Path shouldn't be empty

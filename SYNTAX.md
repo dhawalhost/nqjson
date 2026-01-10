@@ -399,6 +399,36 @@ path := "data|@flatten"       // Flatten nested arrays
 | `@first` | Get first element | `items\|@first` |
 | `@last` | Get last element | `items\|@last` |
 
+#### Advanced Transformation Modifiers
+
+These modifiers provide jq-like transformations for arrays of objects:
+
+| Modifier | Description | Example |
+|----------|-------------|---------|
+| `@sortby:field` | Sort objects by field | `users\|@sortby:age` |
+| `@group:field` / `@groupby:field` | Group objects by field | `users\|@group:city` |
+| `@map:f1;f2` | Project specific fields | `users\|@map:name;email` |
+| `@uniqueby:field` | Unique objects by field | `users\|@uniqueby:city` |
+
+**Note:** For `@map`, use semicolon (`;`) to separate multiple fields, not comma.
+
+**Example:**
+
+```json
+{
+  "users": [
+    {"name": "Alice", "age": 30, "city": "NYC"},
+    {"name": "Bob", "age": 25, "city": "Boston"},
+    {"name": "Carol", "age": 35, "city": "NYC"}
+  ]
+}
+```
+
+- `users|@sortby:age` → `[{"name":"Bob",...}, {"name":"Alice",...}, {"name":"Carol",...}]`
+- `users|@group:city` → `{"NYC":[...], "Boston":[...]}`
+- `users|@map:name;age` → `[{"name":"Alice","age":30}, ...]`
+- `users|@uniqueby:city` → `[{"name":"Alice",...}, {"name":"Bob",...}]`
+
 #### Aggregate Modifiers
 
 | Modifier | Description | Example |
@@ -433,7 +463,46 @@ path := "data|@flatten"       // Flatten nested arrays
 | `@type` | Get JSON type as string | `value\|@type` |
 | `@join` / `@join:","` | Join array to string | `tags\|@join` |
 
-### Modifier Chaining
+#### jq-Style Utility Modifiers
+
+These modifiers provide common operations found in jq:
+
+| Modifier | Description | Example |
+|----------|-------------|---------|
+| `@slice:start:end` | Slice array (supports negative indices) | `items\|@slice:1:3` |
+| `@has:field` | Check if object has field | `user\|@has:name` → `true` |
+| `@contains:value` | Check if array/string contains value | `tags\|@contains:go` |
+| `@split:delim` | Split string by delimiter | `path\|@split:/` |
+| `@startswith:prefix` | Check string starts with prefix | `name\|@startswith:Jo` |
+| `@endswith:suffix` | Check string ends with suffix | `file\|@endswith:.json` |
+| `@entries` / `@toentries` | Object to key-value array | `obj\|@entries` |
+| `@fromentries` | Key-value array to object | `arr\|@fromentries` |
+| `@any` | True if any element is truthy | `bools\|@any` |
+| `@all` | True if all elements are truthy | `bools\|@all` |
+
+**Examples:**
+
+```go
+// Array slicing
+nqjson.Get(json, "items|@slice:1:3")      // Elements 1-2 (exclusive end)
+nqjson.Get(json, "items|@slice:-2:")      // Last 2 elements
+
+// Field checks
+nqjson.Get(json, "user|@has:email")       // true if email field exists
+nqjson.Get(json, "tags|@contains:urgent") // true if "urgent" in tags
+
+// String operations
+nqjson.Get(json, "path|@split:/")         // "a/b/c" → ["a","b","c"]
+nqjson.Get(json, "name|@startswith:Dr.")  // true if starts with "Dr."
+
+// Object ↔ Array conversion
+nqjson.Get(json, "config|@entries")       // {"a":1} → [{"key":"a","value":1}]
+nqjson.Get(json, "pairs|@fromentries")    // [{"key":"a","value":1}] → {"a":1}
+
+// Boolean aggregation
+nqjson.Get(json, "[true,false,true]|@any") // true (at least one truthy)
+nqjson.Get(json, "[true,true,true]|@all")  // true (all truthy)
+```
 
 Chain multiple modifiers together:
 
@@ -530,6 +599,19 @@ Use backslash to escape special characters in key names:
 | `\.` | `.` | Literal dot in key name |
 | `\:` | `:` | Literal colon in key name |
 | `\\` | `\` | Literal backslash |
+| `\|` | `\|` | Literal pipe in key name |
+| `\@` | `@` | Literal at sign in key name |
+| `\*` | `*` | Literal asterisk in key name |
+| `\?` | `?` | Literal question mark in key name |
+| `\#` | `#` | Literal hash in key name |
+| `\,` | `,` | Literal comma in key name |
+| `\(` | `(` | Literal left parenthesis |
+| `\)` | `)` | Literal right parenthesis |
+| `\=` | `=` | Literal equals sign |
+| `\!` | `!` | Literal exclamation mark |
+| `\<` | `<` | Literal less than |
+| `\>` | `>` | Literal greater than |
+| `\~` | `~` | Literal tilde |
 
 ### Examples
 

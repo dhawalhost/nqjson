@@ -91,7 +91,76 @@ var (
 
 	// Path cache for compiled paths (thread-safe)
 	pathCache sync.Map
+
+	// Custom modifier registry (thread-safe)
+	customModifiers   = make(map[string]ModifierFunc)
+	customModifiersMu sync.RWMutex
 )
+
+// ModifierFunc is the signature for custom modifier functions.
+// It receives the current Result and an optional argument string,
+// and returns a transformed Result.
+type ModifierFunc func(result Result, arg string) Result
+
+// RegisterModifier registers a custom modifier with the given name.
+// The modifier can then be used in queries with @name or @name:arg syntax.
+// Thread-safe for concurrent use.
+//
+// Example:
+//
+//	nqjson.RegisterModifier("double", func(r nqjson.Result, arg string) nqjson.Result {
+//	    if r.Type == nqjson.TypeNumber {
+//	        return nqjson.Result{Type: nqjson.TypeNumber, Num: r.Num * 2, Modified: true}
+//	    }
+//	    return r
+//	})
+//	result := nqjson.Get(json, "price|@double")
+func RegisterModifier(name string, fn ModifierFunc) {
+	customModifiersMu.Lock()
+	defer customModifiersMu.Unlock()
+	customModifiers[name] = fn
+}
+
+// UnregisterModifier removes a custom modifier by name.
+// Returns true if the modifier was found and removed.
+func UnregisterModifier(name string) bool {
+	customModifiersMu.Lock()
+	defer customModifiersMu.Unlock()
+	if _, exists := customModifiers[name]; exists {
+		delete(customModifiers, name)
+		return true
+	}
+	return false
+}
+
+// ListModifiers returns a list of all registered modifier names,
+// including both built-in and custom modifiers.
+func ListModifiers() []string {
+	builtIn := []string{
+		"reverse", "keys", "values", "flatten", "first", "last", "join", "sort",
+		"distinct", "unique", "length", "count", "len", "type", "string", "str",
+		"number", "num", "bool", "boolean", "base64", "base64decode", "lower", "upper",
+		"this", "valid", "pretty", "ugly", "sum", "avg", "average", "mean", "min", "max",
+		"group", "groupby", "sortby", "map", "project", "uniqueby", "slice", "has",
+		"contains", "split", "startswith", "endswith", "entries", "toentries",
+		"fromentries", "any", "all",
+	}
+
+	customModifiersMu.RLock()
+	defer customModifiersMu.RUnlock()
+
+	for name := range customModifiers {
+		builtIn = append(builtIn, name)
+	}
+	return builtIn
+}
+
+// getCustomModifier returns a custom modifier function by name, or nil if not found.
+func getCustomModifier(name string) ModifierFunc {
+	customModifiersMu.RLock()
+	defer customModifiersMu.RUnlock()
+	return customModifiers[name]
+}
 
 //------------------------------------------------------------------------------
 // CORE GET IMPLEMENTATION
@@ -147,6 +216,57 @@ func GetCached(data []byte, path string) Result {
 	}
 
 	return result
+}
+
+// GetPath represents a pre-compiled path for fast repeated GET operations.
+// Use CompileGetPath to create a GetPath, then call Run() to execute.
+// This avoids path parsing overhead when executing the same query multiple times.
+type GetPath struct {
+	compiled *compiledPath
+}
+
+// CompileGetPath compiles a path expression for fast repeated execution.
+// Returns a GetPath that can be reused across multiple Get calls.
+// This is faster than GetCached for hot paths as it avoids sync.Map overhead.
+//
+// Example:
+//
+//	path, err := nqjson.CompileGetPath("users.0.name")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	result := path.Run(jsonData)
+func CompileGetPath(path string) (*GetPath, error) {
+	if path == "" {
+		return nil, ErrInvalidQuery
+	}
+
+	cp := compilePath(path)
+	return &GetPath{compiled: cp}, nil
+}
+
+// Run executes the compiled path against the provided JSON data.
+// This is optimized for repeated execution with zero sync overhead.
+func (p *GetPath) Run(data []byte) Result {
+	if p == nil || p.compiled == nil {
+		return Result{Type: TypeUndefined}
+	}
+
+	result := executeCompiledPath(data, p.compiled)
+	if result.Exists() {
+		return result
+	}
+
+	// Fallback to full Get for complex paths that compiled execution can't handle
+	return Get(data, p.compiled.original)
+}
+
+// String returns the original path string.
+func (p *GetPath) String() string {
+	if p == nil || p.compiled == nil {
+		return ""
+	}
+	return p.compiled.original
 }
 
 // unescapePathGet unescapes special characters in a path segment for GET operations
@@ -2570,8 +2690,21 @@ func isModifierName(s string) bool {
 		"pretty": true, "ugly": true,
 		// Aggregate modifiers
 		"sum": true, "avg": true, "average": true, "mean": true, "min": true, "max": true,
+		// Advanced transformation modifiers
+		"group": true, "groupby": true, "sortby": true, "map": true, "project": true, "uniqueby": true,
+		// Additional jq-style modifiers
+		"slice": true, "has": true, "contains": true, "split": true,
+		"startswith": true, "endswith": true, "entries": true, "toentries": true,
+		"fromentries": true, "any": true, "all": true,
 	}
-	return knownModifiers[name]
+
+	// Check built-in modifiers first
+	if knownModifiers[name] {
+		return true
+	}
+
+	// Check custom modifiers registry
+	return getCustomModifier(name) != nil
 }
 
 // parseArrayAccess parses array access syntax in path parts
@@ -3813,6 +3946,41 @@ func applyModifier(result Result, modifier string) Result {
 		return applyPrettyModifier(result, arg)
 	case "ugly":
 		return applyUglyModifier(result)
+	// Advanced transformation modifiers
+	case "group", "groupby":
+		return applyGroupModifier(result, arg)
+	case "sortby":
+		return applySortByModifier(result, arg)
+	case "map", "project":
+		return applyMapModifier(result, arg)
+	case "uniqueby":
+		return applyUniqueByModifier(result, arg)
+	// Additional jq-style modifiers
+	case "slice":
+		return applySliceModifier(result, arg)
+	case "has":
+		return applyHasModifier(result, arg)
+	case "contains":
+		return applyContainsModifier(result, arg)
+	case "split":
+		return applySplitModifier(result, arg)
+	case "startswith":
+		return applyStartsWithModifier(result, arg)
+	case "endswith":
+		return applyEndsWithModifier(result, arg)
+	case "entries", "toentries":
+		return applyEntriesToModifier(result)
+	case "fromentries":
+		return applyFromEntriesModifier(result)
+	case "any":
+		return applyAnyModifier(result)
+	case "all":
+		return applyAllModifier(result)
+	}
+
+	// Check for custom modifiers
+	if customFn := getCustomModifier(name); customFn != nil {
+		return customFn(result, arg)
 	}
 
 	// Return original result if no modifier was applied
@@ -4216,6 +4384,15 @@ func applySumModifier(result Result) Result {
 		return Result{Type: TypeUndefined}
 	}
 
+	// Fast path: scan raw bytes directly for simple numeric arrays
+	if len(result.Raw) > 0 {
+		sum, count := scanArrayNumbersFast(result.Raw)
+		if count > 0 {
+			return buildNumberResult(sum)
+		}
+	}
+
+	// Fallback to original implementation for complex cases
 	var sum float64
 	count := 0
 	result.ForEach(func(_, value Result) bool {
@@ -4238,6 +4415,15 @@ func applyAverageModifier(result Result) Result {
 		return Result{Type: TypeUndefined}
 	}
 
+	// Fast path for simple numeric arrays
+	if len(result.Raw) > 0 {
+		sum, count := scanArrayNumbersFast(result.Raw)
+		if count > 0 {
+			return buildNumberResult(sum / float64(count))
+		}
+	}
+
+	// Fallback for complex arrays
 	var sum float64
 	count := 0
 	result.ForEach(func(_, value Result) bool {
@@ -4260,6 +4446,14 @@ func applyMinModifier(result Result) Result {
 		return Result{Type: TypeUndefined}
 	}
 
+	// Fast path for simple numeric arrays
+	if len(result.Raw) > 0 {
+		if value, found := scanArrayMinMaxFast(result.Raw, true); found {
+			return buildNumberResult(value)
+		}
+	}
+
+	// Fallback for complex arrays
 	var m float64
 	hasValue := false
 	result.ForEach(func(_, value Result) bool {
@@ -4283,6 +4477,15 @@ func applyMaxModifier(result Result) Result {
 	if result.Type != TypeArray {
 		return Result{Type: TypeUndefined}
 	}
+
+	// Fast path for simple numeric arrays
+	if len(result.Raw) > 0 {
+		if value, found := scanArrayMinMaxFast(result.Raw, false); found {
+			return buildNumberResult(value)
+		}
+	}
+
+	// Fallback for complex arrays
 	var m float64
 	hasValue := false
 	result.ForEach(func(_, value Result) bool {
@@ -4300,6 +4503,494 @@ func applyMaxModifier(result Result) Result {
 	}
 
 	return buildNumberResult(m)
+}
+
+// ==================== ADVANCED TRANSFORMATION MODIFIERS ====================
+
+// applyGroupModifier groups array elements by a field value
+// Example: users|@group:city returns {"NYC": [...], "Boston": [...]}
+func applyGroupModifier(result Result, field string) Result {
+	if result.Type != TypeArray || field == "" {
+		return Result{Type: TypeUndefined}
+	}
+
+	items := result.Array()
+	if len(items) == 0 {
+		return Result{Type: TypeObject, Raw: []byte("{}"), Modified: true}
+	}
+
+	// Group elements by field value
+	groups := make(map[string][]Result)
+	var order []string // Maintain insertion order
+
+	for _, value := range items {
+		if value.Type != TypeObject {
+			continue
+		}
+		// Get the field value to group by
+		keyResult := Get(value.Raw, field)
+		key := keyResult.String()
+		if key == "" {
+			key = "null"
+		}
+
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], value)
+	}
+
+	if len(groups) == 0 {
+		return Result{Type: TypeObject, Raw: []byte("{}"), Modified: true}
+	}
+
+	// Build result object
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+	for _, key := range order {
+		items := groups[key]
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+
+		// Write key
+		buf.WriteByte('"')
+		buf.WriteString(escapeString(key))
+		buf.WriteString(`":[`)
+
+		// Write array of items
+		for i, item := range items {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.Write(item.Raw)
+		}
+		buf.WriteByte(']')
+	}
+	buf.WriteByte('}')
+
+	return Result{Type: TypeObject, Raw: buf.Bytes(), Modified: true}
+}
+
+// applySortByModifier sorts array of objects by a field
+// Example: users|@sortby:age
+func applySortByModifier(result Result, field string) Result {
+	if result.Type != TypeArray || field == "" {
+		return Result{Type: TypeUndefined}
+	}
+
+	items := result.Array()
+	if len(items) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	sorted := make([]Result, len(items))
+	copy(sorted, items)
+
+	// Sort by field value (supports string and numeric comparison)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		vi := Get(sorted[i].Raw, field)
+		vj := Get(sorted[j].Raw, field)
+
+		// Try numeric comparison first
+		if vi.Type == TypeNumber && vj.Type == TypeNumber {
+			return vi.Num < vj.Num
+		}
+		// Fall back to string comparison
+		return vi.String() < vj.String()
+	})
+
+	sortedResult := buildWildcardResult(sorted)
+	if sortedResult.Type == TypeUndefined {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+	sortedResult.Modified = true
+	return sortedResult
+}
+
+// applyMapModifier projects specific fields from array of objects
+// Example: users|@map:name;age returns [{"name":"Alice","age":30}, ...]
+// Note: Use semicolon (;) to separate multiple fields, not comma
+func applyMapModifier(result Result, fields string) Result {
+	if result.Type != TypeArray || fields == "" {
+		return Result{Type: TypeUndefined}
+	}
+
+	items := result.Array()
+	if len(items) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	// Parse field list (semicolon-separated to avoid conflict with path parser)
+	fieldList := strings.Split(fields, ";")
+	for i := range fieldList {
+		fieldList[i] = strings.TrimSpace(fieldList[i])
+	}
+
+	// Build projected array
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	first := true
+
+	for _, value := range items {
+		if value.Type != TypeObject {
+			continue
+		}
+
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+
+		// Build projected object
+		buf.WriteByte('{')
+		fieldFirst := true
+		for _, f := range fieldList {
+			fieldVal := Get(value.Raw, f)
+			if !fieldVal.Exists() {
+				continue
+			}
+
+			if !fieldFirst {
+				buf.WriteByte(',')
+			}
+			fieldFirst = false
+
+			buf.WriteByte('"')
+			buf.WriteString(escapeString(f))
+			buf.WriteString(`":`)
+			buf.Write(fieldVal.Raw)
+		}
+		buf.WriteByte('}')
+	}
+	buf.WriteByte(']')
+
+	return Result{Type: TypeArray, Raw: buf.Bytes(), Modified: true}
+}
+
+// applyUniqueByModifier returns unique elements by field
+// Example: users|@uniqueby:city
+func applyUniqueByModifier(result Result, field string) Result {
+	if result.Type != TypeArray || field == "" {
+		return Result{Type: TypeUndefined}
+	}
+
+	items := result.Array()
+	if len(items) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	// Track seen field values
+	seen := make(map[string]bool)
+	var unique []Result
+
+	for _, value := range items {
+		keyResult := Get(value.Raw, field)
+		key := keyResult.String()
+
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, value)
+		}
+	}
+
+	if len(unique) == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	uniqueResult := buildWildcardResult(unique)
+	if uniqueResult.Type == TypeUndefined {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+	uniqueResult.Modified = true
+	return uniqueResult
+}
+
+// ==================== ADDITIONAL JQ-STYLE MODIFIERS ====================
+
+// applySliceModifier returns a slice of an array
+// Example: items|@slice:2:5 returns elements from index 2 to 4 (exclusive)
+func applySliceModifier(result Result, arg string) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeUndefined}
+	}
+
+	items := result.Array()
+	n := len(items)
+	if n == 0 {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	// Parse start:end from arg
+	start, end := 0, n
+	if arg != "" {
+		parts := strings.Split(arg, ":")
+		if len(parts) >= 1 && parts[0] != "" {
+			if s, err := strconv.Atoi(parts[0]); err == nil {
+				start = s
+			}
+		}
+		if len(parts) >= 2 && parts[1] != "" {
+			if e, err := strconv.Atoi(parts[1]); err == nil {
+				end = e
+			}
+		}
+	}
+
+	// Handle negative indices
+	if start < 0 {
+		start = n + start
+	}
+	if end < 0 {
+		end = n + end
+	}
+
+	// Clamp to bounds
+	if start < 0 {
+		start = 0
+	}
+	if end > n {
+		end = n
+	}
+	if start >= end || start >= n {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	sliced := items[start:end]
+	slicedResult := buildWildcardResult(sliced)
+	if slicedResult.Type == TypeUndefined {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+	slicedResult.Modified = true
+	return slicedResult
+}
+
+// applyHasModifier checks if an object has a field or array has index
+// Example: user|@has:name returns true/false
+func applyHasModifier(result Result, field string) Result {
+	if field == "" {
+		return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+	}
+
+	hasField := false
+	if result.Type == TypeObject {
+		fieldResult := Get(result.Raw, field)
+		hasField = fieldResult.Exists()
+	} else if result.Type == TypeArray {
+		// Check if index exists
+		if idx, err := strconv.Atoi(field); err == nil {
+			items := result.Array()
+			if idx >= 0 && idx < len(items) {
+				hasField = true
+			}
+		}
+	}
+
+	if hasField {
+		return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true}
+	}
+	return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+}
+
+// applyContainsModifier checks if array contains value or string contains substring
+// Example: tags|@contains:featured returns true/false
+func applyContainsModifier(result Result, value string) Result {
+	if value == "" {
+		return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+	}
+
+	contains := false
+	switch result.Type {
+	case TypeString:
+		contains = strings.Contains(result.String(), value)
+	case TypeArray:
+		items := result.Array()
+		for _, item := range items {
+			if item.String() == value {
+				contains = true
+				break
+			}
+		}
+	}
+
+	if contains {
+		return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true}
+	}
+	return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+}
+
+// applySplitModifier splits a string by delimiter
+// Example: "a,b,c"|@split:, returns ["a","b","c"]
+func applySplitModifier(result Result, delim string) Result {
+	if result.Type != TypeString {
+		return Result{Type: TypeUndefined}
+	}
+
+	if delim == "" {
+		delim = ","
+	}
+
+	str := result.String()
+	parts := strings.Split(str, delim)
+
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, part := range parts {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('"')
+		buf.WriteString(escapeString(part))
+		buf.WriteByte('"')
+	}
+	buf.WriteByte(']')
+
+	return Result{Type: TypeArray, Raw: buf.Bytes(), Modified: true}
+}
+
+// applyStartsWithModifier checks if string starts with prefix
+// Example: name|@startswith:John returns true/false
+func applyStartsWithModifier(result Result, prefix string) Result {
+	if result.Type != TypeString || prefix == "" {
+		return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+	}
+
+	if strings.HasPrefix(result.String(), prefix) {
+		return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true}
+	}
+	return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+}
+
+// applyEndsWithModifier checks if string ends with suffix
+// Example: email|@endswith:.com returns true/false
+func applyEndsWithModifier(result Result, suffix string) Result {
+	if result.Type != TypeString || suffix == "" {
+		return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+	}
+
+	if strings.HasSuffix(result.String(), suffix) {
+		return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true}
+	}
+	return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+}
+
+// applyEntriesToModifier converts object to array of {key, value} entries
+// Example: {a:1,b:2}|@entries returns [{"key":"a","value":1},{"key":"b","value":2}]
+func applyEntriesToModifier(result Result) Result {
+	if result.Type != TypeObject {
+		return Result{Type: TypeUndefined}
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	first := true
+
+	result.ForEach(func(key, value Result) bool {
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+
+		buf.WriteString(`{"key":`)
+		buf.Write(key.Raw)
+		buf.WriteString(`,"value":`)
+		buf.Write(value.Raw)
+		buf.WriteByte('}')
+		return true
+	})
+
+	buf.WriteByte(']')
+	return Result{Type: TypeArray, Raw: buf.Bytes(), Modified: true}
+}
+
+// applyFromEntriesModifier converts array of {key, value} entries to object
+// Example: [{"key":"a","value":1}]|@fromentries returns {"a":1}
+func applyFromEntriesModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeUndefined}
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+
+	result.ForEach(func(_, entry Result) bool {
+		if entry.Type != TypeObject {
+			return true
+		}
+
+		keyResult := Get(entry.Raw, "key")
+		valueResult := Get(entry.Raw, "value")
+
+		// Also support "k" and "v" or "name" and "value"
+		if !keyResult.Exists() {
+			keyResult = Get(entry.Raw, "k")
+		}
+		if !keyResult.Exists() {
+			keyResult = Get(entry.Raw, "name")
+		}
+		if !valueResult.Exists() {
+			valueResult = Get(entry.Raw, "v")
+		}
+
+		if !keyResult.Exists() || !valueResult.Exists() {
+			return true
+		}
+
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+
+		// Ensure key is a quoted string
+		keyStr := keyResult.String()
+		buf.WriteByte('"')
+		buf.WriteString(escapeString(keyStr))
+		buf.WriteString(`":`)
+		buf.Write(valueResult.Raw)
+		return true
+	})
+
+	buf.WriteByte('}')
+	return Result{Type: TypeObject, Raw: buf.Bytes(), Modified: true}
+}
+
+// applyAnyModifier checks if any element in array is truthy
+// Example: [false,true,false]|@any returns true
+func applyAnyModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+	}
+
+	items := result.Array()
+	for _, item := range items {
+		if item.Bool() {
+			return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true}
+		}
+	}
+	return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+}
+
+// applyAllModifier checks if all elements in array are truthy
+// Example: [true,true,true]|@all returns true
+func applyAllModifier(result Result) Result {
+	if result.Type != TypeArray {
+		return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+	}
+
+	items := result.Array()
+	if len(items) == 0 {
+		return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true} // Vacuous truth
+	}
+
+	for _, item := range items {
+		if !item.Bool() {
+			return Result{Type: TypeBoolean, Boolean: false, Raw: []byte("false"), Modified: true}
+		}
+	}
+	return Result{Type: TypeBoolean, Boolean: true, Raw: []byte("true"), Modified: true}
 }
 
 func flattenResults(result Result, out *[]Result) {
@@ -4350,6 +5041,108 @@ func buildNumberResult(value float64) Result {
 		Raw:      []byte(raw),
 		Modified: true,
 	}
+}
+
+// scanArrayNumbersFast scans raw JSON array bytes and extracts numbers directly
+// without creating Result objects. Returns sum and count.
+// Returns (0, 0) if the array contains non-numeric or complex values.
+func scanArrayNumbersFast(data []byte) (sum float64, count int) {
+	if len(data) < 2 || data[0] != '[' {
+		return 0, 0
+	}
+
+	i := 1 // Skip opening '['
+	for i < len(data) {
+		// Skip whitespace
+		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+			i++
+		}
+		if i >= len(data) || data[i] == ']' {
+			break
+		}
+
+		// Check for number start (digit, minus, or dot)
+		if (data[i] >= '0' && data[i] <= '9') || data[i] == '-' || data[i] == '.' {
+			start := i
+			// Scan the number
+			for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.' || data[i] == '-' || data[i] == 'e' || data[i] == 'E' || data[i] == '+') {
+				i++
+			}
+			// Parse the number
+			if num, err := strconv.ParseFloat(string(data[start:i]), 64); err == nil {
+				sum += num
+				count++
+			} else {
+				return 0, 0 // Failed to parse, bail out
+			}
+		} else if data[i] == '{' || data[i] == '[' || data[i] == '"' {
+			// Complex value (object, nested array, or string) - bail to fallback
+			return 0, 0
+		} else if data[i] == 't' || data[i] == 'f' || data[i] == 'n' {
+			// Boolean or null - bail to fallback
+			return 0, 0
+		}
+
+		// Skip whitespace and comma
+		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+			i++
+		}
+		if i < len(data) && data[i] == ',' {
+			i++
+		}
+	}
+
+	return sum, count
+}
+
+// scanArrayMinMaxFast scans raw JSON array bytes and finds min/max directly
+func scanArrayMinMaxFast(data []byte, findMin bool) (value float64, found bool) {
+	if len(data) < 2 || data[0] != '[' {
+		return 0, false
+	}
+
+	i := 1
+	for i < len(data) {
+		// Skip whitespace
+		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+			i++
+		}
+		if i >= len(data) || data[i] == ']' {
+			break
+		}
+
+		// Check for number
+		if (data[i] >= '0' && data[i] <= '9') || data[i] == '-' || data[i] == '.' {
+			start := i
+			for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.' || data[i] == '-' || data[i] == 'e' || data[i] == 'E' || data[i] == '+') {
+				i++
+			}
+			if num, err := strconv.ParseFloat(string(data[start:i]), 64); err == nil {
+				if !found {
+					value = num
+					found = true
+				} else if findMin && num < value {
+					value = num
+				} else if !findMin && num > value {
+					value = num
+				}
+			} else {
+				return 0, false
+			}
+		} else if data[i] == '{' || data[i] == '[' || data[i] == '"' || data[i] == 't' || data[i] == 'f' || data[i] == 'n' {
+			return 0, false // Complex value, bail
+		}
+
+		// Skip comma
+		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+			i++
+		}
+		if i < len(data) && data[i] == ',' {
+			i++
+		}
+	}
+
+	return value, found
 }
 
 // applyThisModifier returns the result unchanged (@this)
