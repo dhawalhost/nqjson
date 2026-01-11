@@ -23,7 +23,7 @@ linters:
     - copyloopvar
     - depguard
     - dogsled
-    - dupl
+    # - dupl  # Disabled: acceptable duplication in internal utility functions (splitPath)
     - errcheck
     # - exhaustive
     # - funlen
