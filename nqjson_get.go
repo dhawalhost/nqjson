@@ -1633,9 +1633,10 @@ func vectorizedSkipArrayContent(data []byte, pos, end int) int {
 // skipStringInContainer skips a string within an object/array (starts after opening quote)
 func skipStringInContainer(data []byte, pos, end int) int {
 	for pos < end {
-		if data[pos] == '\\' {
+		switch data[pos] {
+		case '\\':
 			pos++
-		} else if data[pos] == '"' {
+		case '"':
 			return pos + 1
 		}
 		pos++
@@ -3270,7 +3271,8 @@ func matchPattern(s, pattern string) bool {
 
 func matchPatternHelper(s, pattern string, si, pi int) bool {
 	for pi < len(pattern) {
-		if pattern[pi] == '*' {
+		switch pattern[pi] {
+		case '*':
 			// * matches zero or more characters
 			// Try matching zero characters first, then more
 			for si <= len(s) {
@@ -3280,14 +3282,14 @@ func matchPatternHelper(s, pattern string, si, pi int) bool {
 				si++
 			}
 			return false
-		} else if pattern[pi] == '?' {
+		case '?':
 			// ? matches exactly one character
 			if si >= len(s) {
 				return false
 			}
 			si++
 			pi++
-		} else {
+		default:
 			// Regular character - must match exactly
 			if si >= len(s) || s[si] != pattern[pi] {
 				return false
@@ -3616,25 +3618,7 @@ func processFilterToken(current Result, token pathToken) (Result, bool) {
 		return true
 	})
 
-	if len(matches) == 0 {
-		return Result{Type: TypeUndefined}, true
-	}
-
-	// Create a new array result
-	var raw bytes.Buffer
-	raw.WriteByte('[')
-	for i, val := range matches {
-		if i > 0 {
-			raw.WriteByte(',')
-		}
-		raw.Write(val.Raw)
-	}
-	raw.WriteByte(']')
-
-	return Result{
-		Type: TypeArray,
-		Raw:  raw.Bytes(),
-	}, false
+	return buildMatchedArrayResult(matches)
 }
 
 // processQueryFirstToken handles #(condition) - returns first matching element
@@ -3662,7 +3646,6 @@ func processQueryFirstToken(current Result, token pathToken) (Result, bool) {
 	return match, false
 }
 
-// processQueryAllToken handles #(condition)# - returns all matching elements
 func processQueryAllToken(current Result, token pathToken) (Result, bool) {
 	if current.Type != TypeArray {
 		return Result{Type: TypeUndefined}, true
@@ -3677,6 +3660,11 @@ func processQueryAllToken(current Result, token pathToken) (Result, bool) {
 		return true
 	})
 
+	return buildMatchedArrayResult(matches)
+}
+
+// buildMatchedArrayResult creates an array result from matched values
+func buildMatchedArrayResult(matches []Result) (Result, bool) {
 	if len(matches) == 0 {
 		return Result{Type: TypeUndefined}, true
 	}
@@ -4577,45 +4565,22 @@ func applyAverageModifier(result Result) Result {
 }
 
 func applyMinModifier(result Result) Result {
-	if result.Type != TypeArray {
-		return Result{Type: TypeUndefined}
-	}
-
-	// Fast path for simple numeric arrays
-	if len(result.Raw) > 0 {
-		if value, found := scanArrayMinMaxFast(result.Raw, true); found {
-			return buildNumberResult(value)
-		}
-	}
-
-	// Fallback for complex arrays
-	var m float64
-	hasValue := false
-	result.ForEach(func(_, value Result) bool {
-		if num, ok := numericValue(value); ok {
-			if !hasValue || num < m {
-				m = num
-				hasValue = true
-			}
-		}
-		return true
-	})
-
-	if !hasValue {
-		return Result{Type: TypeUndefined}
-	}
-
-	return buildNumberResult(m)
+	return applyMinMaxModifier(result, true)
 }
 
 func applyMaxModifier(result Result) Result {
+	return applyMinMaxModifier(result, false)
+}
+
+// applyMinMaxModifier finds minimum or maximum value in an array
+func applyMinMaxModifier(result Result, findMin bool) Result {
 	if result.Type != TypeArray {
 		return Result{Type: TypeUndefined}
 	}
 
 	// Fast path for simple numeric arrays
 	if len(result.Raw) > 0 {
-		if value, found := scanArrayMinMaxFast(result.Raw, false); found {
+		if value, found := scanArrayMinMaxFast(result.Raw, findMin); found {
 			return buildNumberResult(value)
 		}
 	}
@@ -4625,9 +4590,11 @@ func applyMaxModifier(result Result) Result {
 	hasValue := false
 	result.ForEach(func(_, value Result) bool {
 		if num, ok := numericValue(value); ok {
-			if !hasValue || num > m {
+			if !hasValue {
 				m = num
 				hasValue = true
+			} else if (findMin && num < m) || (!findMin && num > m) {
+				m = num
 			}
 		}
 		return true
@@ -4917,10 +4884,11 @@ func applyHasModifier(result Result, field string) Result {
 	}
 
 	hasField := false
-	if result.Type == TypeObject {
+	switch result.Type {
+	case TypeObject:
 		fieldResult := Get(result.Raw, field)
 		hasField = fieldResult.Exists()
-	} else if result.Type == TypeArray {
+	case TypeArray:
 		// Check if index exists
 		if idx, err := strconv.Atoi(field); err == nil {
 			items := result.Array()
