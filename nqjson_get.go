@@ -476,6 +476,8 @@ func executeCompiledPath(data []byte, cp *compiledPath) Result {
 
 // getWithOptions is the core Get implementation with options for multipath and JSON Lines support.
 //
+// getWithOptions allows internal customization of behavior
+//
 //nolint:gocyclo
 func getWithOptions(data []byte, path string, opts getOptions) Result {
 	// Empty path should return non-existent result according to tests
@@ -484,50 +486,44 @@ func getWithOptions(data []byte, path string, opts getOptions) Result {
 	}
 
 	// This avoids multipath detection overhead for the most common case
-	if !opts.allowMultipath || !strings.ContainsAny(path, ",|") {
-		// JSON Lines support: treat leading ".." prefix as newline-delimited documents when applicable.
-		if opts.allowJSONLines && len(path) >= 2 && path[0] == '.' && path[1] == '.' {
-			if jsonLinesResult, handled := getJSONLinesResult(data, path); handled {
-				return jsonLinesResult
-			}
+	if shouldHandleMultipath(path, opts) {
+		// Multipath detection (only when enabled and path contains comma/pipe)
+		if multi, handled := getMultiPathResult(data, path, opts); handled {
+			return multi
 		}
-
-		// Root path returns the entire document
-		if len(path) == 1 && (path[0] == '$' || path[0] == '@') {
-			return Parse(data)
-		}
-
-		// Check if the data is empty
-		if len(data) == 0 {
-			return Result{Type: TypeUndefined}
-		}
-
-		// Check if we can use the ultra-fast path for simple keys
-		if len(data) < 1024 && isUltraSimplePath(path) {
-			result := getUltraSimplePath(data, path)
-			if result.Exists() {
-				return result
-			}
-		}
-
-		// Fast path for simple dot notation paths
-		if isSimplePath(path) {
-			return getSimplePath(data, path)
-		}
-
-		// Use more advanced path processing for complex paths
-		return getComplexPath(data, path)
 	}
 
-	// Multipath detection (only when enabled and path contains comma/pipe)
-	if multi, handled := getMultiPathResult(data, path, opts); handled {
-		return multi
+	return getSinglePathResult(data, path, opts)
+}
+
+func shouldHandleMultipath(path string, opts getOptions) bool {
+	return opts.allowMultipath && strings.ContainsAny(path, ",|")
+}
+
+func getSinglePathResult(data []byte, path string, opts getOptions) Result {
+	// JSON Lines support: treat leading ".." prefix as newline-delimited documents when applicable.
+	if opts.allowJSONLines && len(path) >= 2 && path[0] == '.' && path[1] == '.' {
+		if jsonLinesResult, handled := getJSONLinesResult(data, path); handled {
+			return jsonLinesResult
+		}
 	}
 
-	// Fallback to single-path processing
+	// Root path returns the entire document
+	if len(path) == 1 && (path[0] == '$' || path[0] == '@') {
+		return Parse(data)
+	}
+
 	// Check if the data is empty
 	if len(data) == 0 {
 		return Result{Type: TypeUndefined}
+	}
+
+	// Check if we can use the ultra-fast path for simple keys
+	if len(data) < 1024 && isUltraSimplePath(path) {
+		result := getUltraSimplePath(data, path)
+		if result.Exists() {
+			return result
+		}
 	}
 
 	// Fast path for simple dot notation paths
@@ -572,11 +568,17 @@ func getMultiPathResult(data []byte, path string, opts getOptions) (Result, bool
 
 // splitMultiPath splits a path string into multiple segments based on commas, pipes, and whitespace.
 //
-//nolint:gocyclo
+//go:inline
 func splitMultiPath(path string) []string {
 	// Fast detection for single-path (no split needed)
-	// Check if path contains comma outside of brackets/quotes
-	hasComma := false
+	if !checkForMultiPathSplit(path) {
+		return []string{path}
+	}
+	return performMultiPathSplit(path)
+}
+
+// checkForMultiPathSplit checks if the path needs to be split
+func checkForMultiPathSplit(path string) bool {
 	bracketDepth := 0
 	inString := false
 	var stringQuote byte
@@ -606,87 +608,84 @@ func splitMultiPath(path string) []string {
 			}
 		case ',':
 			if bracketDepth == 0 {
-				//nolint:ineffassign
-				hasComma = true
-				// Early exit - we found a split point
-				goto doSplit
+				return true
 			}
 		}
 	}
+	return false
+}
 
-	// No split needed - return single-element slice without allocation-heavy builder
-	if !hasComma {
-		return []string{path}
-	}
-
-doSplit:
-	// Pre-allocate for common case (2-4 paths)
+// performMultiPathSplit actually splits the path
+// performMultiPathSplit actually splits the path
+func performMultiPathSplit(path string) []string {
 	segments := make([]string, 0, 4)
-
-	// Use byte slice indexing instead of strings.Builder for zero-copy
 	start := 0
-	bracketDepth = 0
-	braceDepth := 0
-	parenDepth := 0
-	inString = false
+	depth := 0
+	inString := false
+	var stringQuote byte
+	escaped := false
 
 	for i := 0; i < len(path); i++ {
 		c := path[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+
 		if inString {
-			if c == '\\' {
-				if i+1 < len(path) {
-					i++
-				}
-				continue
-			}
 			if c == stringQuote {
 				inString = false
 			}
 			continue
 		}
 
-		switch c {
-		case '\'', '"':
+		if c == '\'' || c == '"' {
 			inString = true
 			stringQuote = c
-		case '[':
-			bracketDepth++
-		case ']':
-			if bracketDepth > 0 {
-				bracketDepth--
-			}
-		case '{':
-			braceDepth++
-		case '}':
-			if braceDepth > 0 {
-				braceDepth--
-			}
-		case '(':
-			parenDepth++
-		case ')':
-			if parenDepth > 0 {
-				parenDepth--
-			}
-		case ',':
-			if bracketDepth == 0 && braceDepth == 0 && parenDepth == 0 {
-				// Zero-copy substring extraction
-				segment := strings.TrimSpace(path[start:i])
-				if segment != "" {
-					segments = append(segments, segment)
-				}
-				start = i + 1
-			}
+			continue
 		}
+
+		if c == ',' && depth == 0 {
+			// Found split point
+			segment := strings.TrimSpace(path[start:i])
+			if len(segment) > 0 {
+				segments = append(segments, segment)
+			}
+			start = i + 1
+			continue
+		}
+
+		depth = updateGenericDepth(c, depth)
 	}
 
+	// Add final segment
 	if start < len(path) {
 		segment := strings.TrimSpace(path[start:])
-		if segment != "" {
+		if len(segment) > 0 {
 			segments = append(segments, segment)
 		}
 	}
 
 	return segments
+}
+
+// updateGenericDepth updates depth based on brackets, braces, and parentheses
+func updateGenericDepth(c byte, depth int) int {
+	switch c {
+	case '[', '{', '(':
+		return depth + 1
+	case ']', '}', ')':
+		if depth > 0 {
+			return depth - 1
+		}
+	}
+	return depth
 }
 
 func buildNullResult() Result {
@@ -970,36 +969,27 @@ func GetMany(data []byte, paths ...string) []Result {
 // getUltraSimplePath is an ultra-fast path for very simple JSON with basic paths
 // This handles cases like {"name":"John","age":30} with path "name"
 //
+// getUltraSimplePath is an ultra-fast path for very simple JSON with basic paths
+// This handles cases like {"name":"John","age":30} with path "name"
+//
 //nolint:gocyclo
+//go:inline
 func getUltraSimplePath(data []byte, path string) Result {
-	//  Ultra-fast inline object scanning
-	// This path is optimized for single-key lookups in small-medium JSON objects
-	// Target: 20-30ns for optimal performance
-
+	// Target: 20-30ns for single-key lookups
 	keyLen := len(path)
-	if keyLen == 0 || len(data) < keyLen+6 { // Minimum: {"k":v}
+	if keyLen == 0 || len(data) < keyLen+6 {
 		return Result{Type: TypeUndefined}
 	}
 
 	// Skip leading whitespace and find opening brace
-	i := 0
-	for ; i < len(data); i++ {
-		if data[i] > ' ' {
-			break
-		}
-	}
-
-	if i >= len(data) || data[i] != '{' {
+	i := locateObjectStart(data)
+	if i == -1 {
 		return Result{Type: TypeUndefined}
 	}
-	i++ // Skip '{'
 
-	// Inline key scanning with early termination
-	// Scan through object keys looking for exact match
+	// Scan through object keys
 	for i < len(data) {
-		// Skip whitespace
-		for ; i < len(data) && data[i] <= ' '; i++ {
-		}
+		i = skipWhitespaceInline(data, i)
 
 		if i >= len(data) || data[i] == '}' {
 			return Result{Type: TypeUndefined}
@@ -1009,76 +999,104 @@ func getUltraSimplePath(data []byte, path string) Result {
 			return Result{Type: TypeUndefined}
 		}
 
-		keyStart := i + 1
+		// Check if key matches
+		match, keyEnd := compareSimpleKey(data, i+1, path)
+		if match {
+			// Found the key! Skip to value
+			i = keyEnd + 1 // After closing quote
 
-		// Fast key comparison without allocation
-		if i+keyLen+2 < len(data) && data[keyStart+keyLen] == '"' {
-			match := true
-			for j := 0; j < keyLen; j++ {
-				if data[keyStart+j] != path[j] {
-					match = false
-					break
-				}
+			// Skip colon
+			i = skipToSimpleValue(data, i)
+			if i == -1 {
+				return Result{Type: TypeUndefined}
 			}
 
-			if match {
-				// Found the key! Skip to value
-				i = keyStart + keyLen + 1 // After closing quote
-
-				// Skip whitespace and colon
-				for ; i < len(data) && data[i] <= ' '; i++ {
-				}
-				if i >= len(data) || data[i] != ':' {
-					return Result{Type: TypeUndefined}
-				}
-				i++ // Skip ':'
-
-				// Skip whitespace before value
-				for ; i < len(data) && data[i] <= ' '; i++ {
-				}
-
-				if i >= len(data) {
-					return Result{Type: TypeUndefined}
-				}
-
-				// Inline value parsing (zero allocation)
-				return parseValueAtPosition(data, i)
-			}
+			// Inline value parsing
+			return parseValueAtPosition(data, i)
 		}
 
-		// Skip this key-value pair
-		// Find end of current key
-		for i++; i < len(data); i++ {
-			if data[i] == '\\' && i+1 < len(data) {
-				i++ // Skip escaped char
-				continue
-			}
-			if data[i] == '"' {
-				i++
-				break
-			}
-		}
-
-		// Skip colon
-		for ; i < len(data) && data[i] <= ' '; i++ {
-		}
-		if i >= len(data) || data[i] != ':' {
+		// Skip this key-value pair and move to next
+		i = skipSimpleKeyValuePair(data, i)
+		if i == -1 {
 			return Result{Type: TypeUndefined}
-		}
-		i++ // Skip ':'
-
-		// Skip value
-		i = skipValue(data, i)
-
-		// Skip comma
-		for ; i < len(data) && data[i] <= ' '; i++ {
-		}
-		if i < len(data) && data[i] == ',' {
-			i++
 		}
 	}
 
 	return Result{Type: TypeUndefined}
+}
+
+// locateObjectStart skips whitespace and checks for '{'
+func locateObjectStart(data []byte) int {
+	i := skipWhitespaceInline(data, 0)
+	if i >= len(data) || data[i] != '{' {
+		return -1
+	}
+	return i + 1
+}
+
+// compareSimpleKey compares key at pos with path. Returns match and keyEnd position.
+func compareSimpleKey(data []byte, keyStart int, path string) (bool, int) {
+	keyLen := len(path)
+
+	// Fast key comparison without allocation
+	if keyStart+keyLen+1 < len(data) && data[keyStart+keyLen] == '"' {
+		match := true
+		for j := 0; j < keyLen; j++ {
+			if data[keyStart+j] != path[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true, keyStart + keyLen
+		}
+	}
+	return false, 0
+}
+
+// skipToSimpleValue skips whitespace and colon to find value start
+func skipToSimpleValue(data []byte, i int) int {
+	i = skipWhitespaceInline(data, i)
+	if i >= len(data) || data[i] != ':' {
+		return -1
+	}
+	i++ // Skip ':'
+	i = skipWhitespaceInline(data, i)
+	if i >= len(data) {
+		return -1
+	}
+	return i
+}
+
+// skipSimpleKeyValuePair skips key, colon, value, and optional comma
+func skipSimpleKeyValuePair(data []byte, i int) int {
+	// Find end of current key
+	for i++; i < len(data); i++ {
+		if data[i] == '\\' && i+1 < len(data) {
+			i++ // Skip escaped char
+			continue
+		}
+		if data[i] == '"' {
+			i++
+			break
+		}
+	}
+
+	// Skip colon
+	i = skipToSimpleValue(data, i)
+	if i == -1 {
+		return -1
+	}
+
+	// Skip value
+	i = skipValue(data, i)
+
+	// Skip comma
+	i = skipWhitespaceInline(data, i)
+	if i < len(data) && data[i] == ',' {
+		i++
+	}
+	return i
 }
 
 /*
@@ -1246,14 +1264,11 @@ func getSimplePath(data []byte, path string) Result {
 
 // Recursive object parser - processes path segments on the fly
 //
-//go:inline
-//nolint:gocyclo
-func parseObjectRecursive(data []byte, pos int, path string) Result {
-	// Parse the first segment of the path, respecting escape sequences
+// parsePathSegmentForObject parses the first segment of a path and returns segment, remaining path, and force object key flag
+func parsePathSegmentForObject(path string) (segment string, remainingPath string, forceObjectKey bool) {
 	segEnd := 0
 	for segEnd < len(path) {
 		if path[segEnd] == '\\' && segEnd+1 < len(path) {
-			// Skip escaped character
 			segEnd += 2
 			continue
 		}
@@ -1263,11 +1278,10 @@ func parseObjectRecursive(data []byte, pos int, path string) Result {
 		segEnd++
 	}
 	if segEnd == 0 {
-		return Result{Type: TypeUndefined}
+		return "", "", false
 	}
 
 	rawSegment := path[:segEnd]
-	remainingPath := ""
 	if segEnd < len(path) {
 		if path[segEnd] == '.' {
 			remainingPath = path[segEnd+1:]
@@ -1276,121 +1290,131 @@ func parseObjectRecursive(data []byte, pos int, path string) Result {
 		}
 	}
 
-	// Unescape the segment and handle colon prefix
-	segment := unescapePathGet(rawSegment)
-	forceObjectKey := hasColonPrefixGet(segment)
+	segment = unescapePathGet(rawSegment)
+	forceObjectKey = hasColonPrefixGet(segment)
 	if forceObjectKey {
 		segment = stripColonPrefixGet(segment)
 	}
+	return segment, remainingPath, forceObjectKey
+}
 
+// scanKeyInObject scans an object key starting after the opening quote
+// Returns keyStart, keyEnd, newPos
+func scanKeyInObject(data []byte, pos int) (keyStart, keyEnd, newPos int) {
+	keyStart = pos
+
+	// ULTRA-FAST KEY SCAN: Process 8 bytes at once
+	for pos+7 < len(data) {
+		if data[pos] > '\\' && data[pos+1] > '\\' &&
+			data[pos+2] > '\\' && data[pos+3] > '\\' &&
+			data[pos+4] > '\\' && data[pos+5] > '\\' &&
+			data[pos+6] > '\\' && data[pos+7] > '\\' {
+			pos += 8
+			continue
+		}
+		break
+	}
+
+	// Find end of key
+	for pos < len(data) {
+		c := data[pos]
+		if c == '\\' {
+			pos += 2
+			continue
+		}
+		if c == '"' {
+			break
+		}
+		pos++
+	}
+
+	return keyStart, pos, pos + 1
+}
+
+// matchKeyBytes checks if key in data matches segment
+func matchKeyBytes(data []byte, keyStart, keyEnd int, segment string) bool {
 	segLen := len(segment)
+	if keyEnd-keyStart != segLen {
+		return false
+	}
+	for i := 0; i < segLen; i++ {
+		if data[keyStart+i] != segment[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// skipToObjectValue skips whitespace and colon to get to value position
+// Returns new position or -1 on error
+func skipToObjectValue(data []byte, pos int) int {
+	for pos < len(data) && data[pos] <= ' ' {
+		pos++
+	}
+	if pos >= len(data) || data[pos] != ':' {
+		return -1
+	}
+	pos++
+	for pos < len(data) && data[pos] <= ' ' {
+		pos++
+	}
+	if pos >= len(data) {
+		return -1
+	}
+	return pos
+}
+
+// parseObjectRecursive parses a JSON object recursively to find a key
+//
+//go:inline
+func parseObjectRecursive(data []byte, pos int, path string) Result {
+	segment, remainingPath, _ := parsePathSegmentForObject(path)
+	if segment == "" {
+		return Result{Type: TypeUndefined}
+	}
+
 	hasRemainingPath := len(remainingPath) > 0
 
-	// Scan object for matching key
 	for pos < len(data) {
-		// Skip whitespace
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
+		pos = skipWhitespaceInline(data, pos)
 		if pos >= len(data) || data[pos] == '}' {
 			break
 		}
 
-		// Expect quote
 		if data[pos] != '"' {
 			return Result{Type: TypeUndefined}
 		}
 		pos++
 
-		keyStart := pos
+		keyStart, keyEnd, newPos := scanKeyInObject(data, pos)
+		keyMatches := matchKeyBytes(data, keyStart, keyEnd, segment)
+		pos = newPos
 
-		// ULTRA-FAST KEY SCAN: Process 8 bytes at once
-		// Characters > '\\' (92) can be skipped instantly
-		for pos+7 < len(data) {
-			if data[pos] > '\\' && data[pos+1] > '\\' &&
-				data[pos+2] > '\\' && data[pos+3] > '\\' &&
-				data[pos+4] > '\\' && data[pos+5] > '\\' &&
-				data[pos+6] > '\\' && data[pos+7] > '\\' {
-				pos += 8
-				continue
-			}
-			break
-		}
-
-		// Find end of key
-		for pos < len(data) {
-			c := data[pos]
-			if c == '\\' {
-				pos += 2
-				continue
-			}
-			if c == '"' {
-				break
-			}
-			pos++
-		}
-
-		keyEnd := pos
-
-		// Quick length check before byte-by-byte comparison
-		keyMatches := (keyEnd-keyStart == segLen)
-		if keyMatches {
-			for i := 0; i < segLen; i++ {
-				if data[keyStart+i] != segment[i] {
-					keyMatches = false
-					break
-				}
-			}
-		}
-
-		pos++ // Skip closing quote
-
-		// Skip to colon
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
-		if pos >= len(data) || data[pos] != ':' {
-			return Result{Type: TypeUndefined}
-		}
-		pos++
-
-		// Skip to value
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
-		if pos >= len(data) {
+		pos = skipToObjectValue(data, pos)
+		if pos == -1 {
 			return Result{Type: TypeUndefined}
 		}
 
 		if keyMatches {
-			// Found matching key!
 			if !hasRemainingPath {
-				// This is the final segment - parse and return value
 				return parseValueAtPosition(data, pos)
 			}
-
-			// Continue with remaining path
 			c := data[pos]
-			switch c {
-			case '{':
+			if c == '{' {
 				return parseObjectRecursive(data, pos+1, remainingPath)
-			case '[':
+			}
+			if c == '[' {
 				return parseArrayRecursive(data, pos+1, remainingPath)
 			}
-
 			return Result{Type: TypeUndefined}
 		}
 
-		// Skip this value using ultra-fast vectorized skipper
 		pos = vectorizedSkipValue(data, pos, len(data))
 		if pos == -1 {
 			return Result{Type: TypeUndefined}
 		}
 
-		// Skip comma
-		for pos < len(data) && data[pos] <= ' ' {
-			pos++
-		}
+		pos = skipWhitespaceInline(data, pos)
 		if pos < len(data) && data[pos] == ',' {
 			pos++
 		}
@@ -1399,14 +1423,62 @@ func parseObjectRecursive(data []byte, pos int, path string) Result {
 	return Result{Type: TypeUndefined}
 }
 
+// skipWhitespaceInline efficiently skips whitespace
+func skipWhitespaceInline(data []byte, pos int) int {
+	for pos < len(data) && data[pos] <= ' ' {
+		pos++
+	}
+	return pos
+}
+
 // Recursive array parser
+//
+// recursive array parser
 //
 //nolint:gocyclo
 //go:inline
+//go:inline
 func parseArrayRecursive(data []byte, pos int, path string) Result {
+	idx, remainingPath, ok := parseArrayIndexFromPath(path)
+	if !ok {
+		return Result{Type: TypeUndefined}
+	}
+
+	// Skip to target index
+	pos = skipToArrayIndex(data, pos, idx)
+	if pos == -1 {
+		return Result{Type: TypeUndefined}
+	}
+
+	// Skip to element
+	for pos < len(data) && data[pos] <= ' ' {
+		pos++
+	}
+	if pos >= len(data) {
+		return Result{Type: TypeUndefined}
+	}
+
+	if len(remainingPath) == 0 {
+		// This is the final value
+		return parseValueAtPosition(data, pos)
+	}
+
+	// Recursive step
+	if data[pos] == '{' {
+		return parseObjectRecursive(data, pos+1, remainingPath)
+	}
+	if data[pos] == '[' {
+		return parseArrayRecursive(data, pos+1, remainingPath)
+	}
+
+	return Result{Type: TypeUndefined}
+}
+
+// parseArrayIndexFromPath extracts the numeric index from the start of the path
+func parseArrayIndexFromPath(path string) (int, string, bool) {
 	// Check if path starts with array index
 	if len(path) == 0 || (path[0] < '0' || path[0] > '9') {
-		return Result{Type: TypeUndefined}
+		return 0, "", false
 	}
 
 	// Parse index
@@ -1426,22 +1498,25 @@ func parseArrayRecursive(data []byte, pos int, path string) Result {
 			remainingPath = path[i:]
 		}
 	}
+	return idx, remainingPath, true
+}
 
-	// Skip to target index
+// skipToArrayIndex skips array elements until reaching targetIdx
+func skipToArrayIndex(data []byte, pos, targetIdx int) int {
 	currentIdx := 0
-	for pos < len(data) && currentIdx < idx {
+	for pos < len(data) && currentIdx < targetIdx {
 		// Skip whitespace
 		for pos < len(data) && data[pos] <= ' ' {
 			pos++
 		}
 		if pos >= len(data) || data[pos] == ']' {
-			return Result{Type: TypeUndefined}
+			return -1
 		}
 
 		// Skip value
 		pos = vectorizedSkipValue(data, pos, len(data))
 		if pos == -1 {
-			return Result{Type: TypeUndefined}
+			return -1
 		}
 		currentIdx++
 
@@ -1453,29 +1528,7 @@ func parseArrayRecursive(data []byte, pos int, path string) Result {
 			pos++
 		}
 	}
-
-	// Skip to element
-	for pos < len(data) && data[pos] <= ' ' {
-		pos++
-	}
-	if pos >= len(data) {
-		return Result{Type: TypeUndefined}
-	}
-
-	if len(remainingPath) == 0 {
-		// This is the final value
-		return parseValueAtPosition(data, pos)
-	}
-
-	// Continue with remaining path
-	switch data[pos] {
-	case '{':
-		return parseObjectRecursive(data, pos+1, remainingPath)
-	case '[':
-		return parseArrayRecursive(data, pos+1, remainingPath)
-	}
-
-	return Result{Type: TypeUndefined}
+	return pos
 }
 
 // Parse value at current position
@@ -1493,7 +1546,8 @@ func parseValueAtPosition(data []byte, pos int) Result {
 
 // Vectorized value skipper with 8-byte scanning optimization
 //
-//nolint:gocyclo
+// vectorizedSkipValue skips a JSON value using fast byte scanning
+//
 //go:inline
 func vectorizedSkipValue(data []byte, pos, end int) int {
 	if pos >= end {
@@ -1503,100 +1557,108 @@ func vectorizedSkipValue(data []byte, pos, end int) int {
 	c := data[pos]
 	switch c {
 	case '"':
-		// ULTRA-FAST STRING SKIP - Process 8 bytes at once
-		pos++
-		for pos+7 < end {
-			// Check 8 bytes at once - characters > '\\' are safe to skip
-			if data[pos] > '\\' && data[pos+1] > '\\' &&
-				data[pos+2] > '\\' && data[pos+3] > '\\' &&
-				data[pos+4] > '\\' && data[pos+5] > '\\' &&
-				data[pos+6] > '\\' && data[pos+7] > '\\' {
-				pos += 8
-				continue
-			}
-			break
-		}
-
-		// Handle remaining bytes
-		for pos < end {
-			c := data[pos]
-			if c == '\\' {
-				pos += 2
-				if pos >= end {
-					return -1
-				}
-				continue
-			}
-			if c == '"' {
-				return pos + 1
-			}
-			pos++
-		}
-		return -1
-
+		return vectorizedSkipString(data, pos, end)
 	case '{':
-		// Skip object - simplified without string tracking (faster!)
-		pos++
-		depth := 1
-		for pos < end && depth > 0 {
-			c := data[pos]
-			if c == '{' {
-				depth++
-			} else if c == '}' {
-				depth--
-			} else if c == '"' {
-				// Skip string content quickly
-				pos++
-				for pos < end {
-					if data[pos] == '\\' {
-						pos++
-					} else if data[pos] == '"' {
-						break
-					}
-					pos++
-				}
-			}
-			pos++
-		}
-		return pos
-
+		return vectorizedSkipObjectContent(data, pos+1, end)
 	case '[':
-		// Skip array - simplified
-		pos++
-		depth := 1
-		for pos < end && depth > 0 {
-			c := data[pos]
-			if c == '[' {
-				depth++
-			} else if c == ']' {
-				depth--
-			} else if c == '"' {
-				// Skip string content quickly
-				pos++
-				for pos < end {
-					if data[pos] == '\\' {
-						pos++
-					} else if data[pos] == '"' {
-						break
-					}
-					pos++
-				}
-			}
-			pos++
-		}
-		return pos
-
+		return vectorizedSkipArrayContent(data, pos+1, end)
 	default:
-		// Skip number, true, false, null - tightest possible loop
-		for pos < end {
-			c := data[pos]
-			if c <= ' ' || c == ',' || c == ']' || c == '}' {
-				return pos
-			}
-			pos++
-		}
-		return pos
+		return skipPrimitiveToken(data, pos, end)
 	}
+}
+
+// vectorizedSkipString skips a JSON string using 8-byte vectorized scanning
+func vectorizedSkipString(data []byte, pos, end int) int {
+	pos++
+	// ULTRA-FAST: Process 8 bytes at once - characters > '\\' are safe to skip
+	for pos+7 < end {
+		if data[pos] > '\\' && data[pos+1] > '\\' &&
+			data[pos+2] > '\\' && data[pos+3] > '\\' &&
+			data[pos+4] > '\\' && data[pos+5] > '\\' &&
+			data[pos+6] > '\\' && data[pos+7] > '\\' {
+			pos += 8
+			continue
+		}
+		break
+	}
+
+	// Handle remaining bytes
+	for pos < end {
+		c := data[pos]
+		if c == '\\' {
+			pos += 2
+			if pos >= end {
+				return -1
+			}
+			continue
+		}
+		if c == '"' {
+			return pos + 1
+		}
+		pos++
+	}
+	return -1
+}
+
+// vectorizedSkipObjectContent skips object content (after opening brace)
+func vectorizedSkipObjectContent(data []byte, pos, end int) int {
+	depth := 1
+	for pos < end && depth > 0 {
+		c := data[pos]
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+		} else if c == '"' {
+			pos = skipStringInContainer(data, pos+1, end)
+			continue
+		}
+		pos++
+	}
+	return pos
+}
+
+// vectorizedSkipArrayContent skips array content (after opening bracket)
+func vectorizedSkipArrayContent(data []byte, pos, end int) int {
+	depth := 1
+	for pos < end && depth > 0 {
+		c := data[pos]
+		if c == '[' {
+			depth++
+		} else if c == ']' {
+			depth--
+		} else if c == '"' {
+			pos = skipStringInContainer(data, pos+1, end)
+			continue
+		}
+		pos++
+	}
+	return pos
+}
+
+// skipStringInContainer skips a string within an object/array (starts after opening quote)
+func skipStringInContainer(data []byte, pos, end int) int {
+	for pos < end {
+		if data[pos] == '\\' {
+			pos++
+		} else if data[pos] == '"' {
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
+}
+
+// skipPrimitiveToken skips a primitive value (number, true, false, null)
+func skipPrimitiveToken(data []byte, pos, end int) int {
+	for pos < end {
+		c := data[pos]
+		if c <= ' ' || c == ',' || c == ']' || c == '}' {
+			return pos
+		}
+		pos++
+	}
+	return pos
 }
 
 /*
@@ -2525,78 +2587,24 @@ type filterExpr struct {
 // and not immediately following a '.'. This preserves cases like "users.@length" as invalid
 // path segments and avoids interference with filter "@.field" usage.
 //
+// parseModifiers extracts and parses modifier tokens from a path.
+// Supports both legacy '|' and JSONPath-like '@' suffix modifiers.
+// For '@', only treat as a modifier separator when not inside strings/brackets/parentheses
+// and not immediately following a '.'. This preserves cases like "users.@length" as invalid
+// path segments and avoids interference with filter "@.field" usage.
+//
 //nolint:gocyclo
+//go:inline
 func parseModifiers(path string) ([]pathToken, string, string) {
-	var modifiers []pathToken
-	var remainingPath string
-
 	// Fast path: if neither '|' nor '@' present, return early
 	if !strings.ContainsAny(path, "|@") {
-		return modifiers, path, ""
+		return nil, path, ""
 	}
 
 	// Scan for the first valid modifier separator position
-	sepIdx := -1
-	bracketDepth := 0
-	parenDepth := 0
-	inString := false
-	var stringQuote byte
-	for i := 0; i < len(path); i++ {
-		c := path[i]
-		if inString {
-			if c == '\\' {
-				// skip escaped char
-				i++
-				continue
-			}
-			if c == stringQuote {
-				inString = false
-			}
-			continue
-		}
-
-		// Ignore escaped characters outside strings (treat \| and \@ as literals)
-		if c == '\\' {
-			if i+1 < len(path) {
-				i++
-				continue
-			}
-		}
-
-		switch c {
-		case '\'', '"':
-			inString = true
-			stringQuote = c
-		case '[':
-			bracketDepth++
-		case ']':
-			if bracketDepth > 0 {
-				bracketDepth--
-			}
-		case '(':
-			parenDepth++
-		case ')':
-			if parenDepth > 0 {
-				parenDepth--
-			}
-		case '|':
-			if bracketDepth == 0 && parenDepth == 0 {
-				sepIdx = i
-				i = len(path) // break
-			}
-		case '@':
-			if bracketDepth == 0 && parenDepth == 0 {
-				// Treat @ as modifier start if at beginning of path or not immediately after a dot
-				if i == 0 || (i > 0 && path[i-1] != '.') {
-					sepIdx = i
-					i = len(path) // break
-				}
-			}
-		}
-	}
-
+	sepIdx := findModifierSeparator(path)
 	if sepIdx < 0 {
-		return modifiers, path, ""
+		return nil, path, ""
 	}
 
 	// Extract suffix with modifiers and the main path
@@ -2604,8 +2612,80 @@ func parseModifiers(path string) ([]pathToken, string, string) {
 	cleanPath := path[:sepIdx]
 
 	// Parse modifiers and remaining path from suffix
-	// Format: modifier|modifier|path or modifier.path
 	parts := splitModifierParts(suffix)
+	modifiers, remainingPath := parseModifierParts(parts)
+
+	return modifiers, cleanPath, remainingPath
+}
+
+// findModifierSeparator finds the index of the first valid modifier separator
+func findModifierSeparator(path string) int {
+	bracketDepth := 0
+	parenDepth := 0
+	inString := false
+	var stringQuote byte
+	escaped := false
+
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+
+		if inString {
+			if c == stringQuote {
+				inString = false
+			}
+			continue
+		}
+
+		if c == '\'' || c == '"' {
+			inString = true
+			stringQuote = c
+			continue
+		}
+
+		if isModifierSeparator(path, i, bracketDepth, parenDepth) {
+			return i
+		}
+
+		bracketDepth, parenDepth = updatePathDepths(c, bracketDepth, parenDepth)
+	}
+	return -1
+}
+
+// isModifierSeparator checks if the current character is a valid modifier separator
+func isModifierSeparator(path string, i int, bracketDepth, parenDepth int) bool {
+	c := path[i]
+	if bracketDepth > 0 || parenDepth > 0 {
+		return false
+	}
+
+	if c == '|' {
+		return true
+	}
+
+	if c == '@' {
+		// Treat @ as modifier start if at beginning of path or not immediately after a dot
+		if i == 0 || (i > 0 && path[i-1] != '.') {
+			return true
+		}
+	}
+	return false
+}
+
+// parseModifierParts parses split parts into modifiers and remaining path
+func parseModifierParts(parts []string) ([]pathToken, string) {
+	var modifiers []pathToken
+	var remainingPath string
+
 	for i, part := range parts {
 		if part == "" {
 			continue
@@ -2625,8 +2705,7 @@ func parseModifiers(path string) ([]pathToken, string, string) {
 			break
 		}
 	}
-
-	return modifiers, cleanPath, remainingPath
+	return modifiers, remainingPath
 }
 
 // splitModifierParts splits a string by | and @ at depth 0
@@ -2736,93 +2815,124 @@ func parseArrayAccess(part string) []pathToken {
 
 // tokenizePath breaks a path into tokens for efficient execution
 //
-//nolint:gocyclo
+//go:inline
 func tokenizePath(path string) []pathToken {
 	var tokens []pathToken
 
 	// Check for modifiers (returns modifiers, clean path, and remaining path after modifiers)
 	modifiers, cleanPath, remainingPath := parseModifiers(path)
 
-	// Split the path on dots, but respect brackets and parentheses so that
-	// dots inside filters like [?( @.age>28 )] don't split the segment.
+	// Split the path on dots, but respect brackets and parentheses
+	parts := splitPathSegments(cleanPath)
+
+	// Convert parts to tokens
+	tokens = convertPartsToTokens(parts)
+
+	// Add modifiers as tokens
+	tokens = appendModifiersToTokens(tokens, modifiers)
+
+	// Recursively parse remaining path (for piped modifiers)
+	if remainingPath != "" {
+		remainingTokens := tokenizePath(remainingPath)
+		tokens = append(tokens, remainingTokens...)
+	}
+
+	return tokens
+}
+
+func splitPathSegments(path string) []string {
 	var parts []string
 	var cur strings.Builder
 	bracketDepth := 0
 	parenDepth := 0
 	inString := false
 	var stringQuote byte
-	for i := 0; i < len(cleanPath); i++ {
-		c := cleanPath[i]
-		escaped := isEscapedAt(cleanPath, i)
+	escaped := false
+
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+
+		if escaped {
+			cur.WriteByte(c)
+			escaped = false
+			continue
+		}
+
+		if c == '\\' {
+			escaped = true
+			cur.WriteByte(c)
+			continue
+		}
 
 		if inString {
 			cur.WriteByte(c)
-			if c == '\\' { // escape next char
-				if i+1 < len(cleanPath) {
-					i++
-					cur.WriteByte(cleanPath[i])
-				}
-				continue
-			}
-			if !escaped && c == stringQuote {
+			if c == stringQuote {
 				inString = false
 			}
 			continue
 		}
 
-		switch c {
-		case '\'', '"':
-			if escaped {
-				cur.WriteByte(c)
-				continue
-			}
+		if c == '\'' || c == '"' {
 			inString = true
 			stringQuote = c
 			cur.WriteByte(c)
 			continue
-		case '[':
-			if !escaped {
-				bracketDepth++
-			}
-		case ']':
-			if !escaped && bracketDepth > 0 {
-				bracketDepth--
-			}
-		case '(':
-			if !escaped {
-				parenDepth++
-			}
-		case ')':
-			if !escaped && parenDepth > 0 {
-				parenDepth--
-			}
-		case '.':
-			if !escaped && bracketDepth == 0 && parenDepth == 0 {
-				parts = append(parts, cur.String())
-				cur.Reset()
-				continue
-			}
 		}
+
+		if shouldSplitAtDot(c, bracketDepth, parenDepth) {
+			parts = append(parts, cur.String())
+			cur.Reset()
+			continue
+		}
+
+		bracketDepth, parenDepth = updatePathDepths(c, bracketDepth, parenDepth)
 		cur.WriteByte(c)
 	}
+
 	if cur.Len() > 0 {
 		parts = append(parts, cur.String())
 	}
+	return parts
+}
 
+func updatePathDepths(c byte, bracketDepth, parenDepth int) (int, int) {
+	switch c {
+	case '[':
+		return bracketDepth + 1, parenDepth
+	case ']':
+		if bracketDepth > 0 {
+			return bracketDepth - 1, parenDepth
+		}
+	case '(':
+		return bracketDepth, parenDepth + 1
+	case ')':
+		if parenDepth > 0 {
+			return bracketDepth, parenDepth - 1
+		}
+	}
+	return bracketDepth, parenDepth
+}
+
+// shouldSplitAtDot checks if we should split at the current character (dot)
+func shouldSplitAtDot(c byte, bracketDepth, parenDepth int) bool {
+	return c == '.' && bracketDepth == 0 && parenDepth == 0
+}
+
+// convertPartsToTokens converts string parts into pathTokens
+func convertPartsToTokens(parts []string) []pathToken {
+	var tokens []pathToken
 	for _, part := range parts {
 		if part == "" {
 			continue
 		}
 
 		unescaped := unescapePathGet(part)
-
 		if unescaped == "*" && part == "*" {
 			tokens = append(tokens, pathToken{kind: tokenWildcard})
 			continue
 		}
 
 		if unescaped == "#" && part == "#" {
-			// # is used for array length/count or array wildcard depending on context
 			tokens = append(tokens, pathToken{kind: tokenArrayLength})
 			continue
 		}
@@ -2839,29 +2949,26 @@ func tokenizePath(path string) []pathToken {
 			continue
 		}
 
-		// Check for array access
-		if strings.HasSuffix(unescaped, "]") && strings.Contains(unescaped, "[") {
+		// Check for bracket notation like [1] or ["key"] or key[index]
+		if strings.Contains(unescaped, "[") && strings.HasSuffix(unescaped, "]") {
 			arrayTokens := parseArrayAccess(unescaped)
 			tokens = append(tokens, arrayTokens...)
 		} else if idx, err := strconv.Atoi(unescaped); err == nil && idx >= 0 {
 			// Pure numeric token - treat as array index
 			tokens = append(tokens, pathToken{kind: tokenIndex, num: idx})
 		} else {
+			// Standard dot property
 			tokens = append(tokens, pathToken{kind: tokenKey, str: unescaped})
 		}
 	}
-
-	// Append modifiers at the end if any
-	tokens = append(tokens, modifiers...)
-
-	// If there's a remaining path after modifiers (e.g., "0" in "children|@reverse|0"),
-	// tokenize it and append those tokens
-	if remainingPath != "" {
-		remainingTokens := tokenizePath(remainingPath)
-		tokens = append(tokens, remainingTokens...)
-	}
-
 	return tokens
+}
+
+// appendModifiersToTokens adds modifiers to the token list
+func appendModifiersToTokens(tokens []pathToken, modifiers []pathToken) []pathToken {
+	// The modifiers are already pathToken objects from parseModifiers
+	// We just need to append them.
+	return append(tokens, modifiers...)
 }
 
 // parseQueryExpression parses query expressions: #(condition) or #(condition)#
@@ -2895,13 +3002,34 @@ func parseQueryCondition(condition string) *filterExpr {
 	// We need to find operators that are NOT inside parentheses
 
 	// Find the operator at depth 0 (not inside nested queries)
-	var op string
-	opIdx := -1
+	op, opIdx := findQueryOperator(condition)
 
+	if opIdx != -1 {
+		left := strings.TrimSpace(condition[:opIdx])
+		value := strings.TrimSpace(condition[opIdx+len(op):])
+
+		// Remove quotes from value if present
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') ||
+			(value[0] == '\'' && value[len(value)-1] == '\'')) {
+			value = value[1 : len(value)-1]
+		}
+
+		return &filterExpr{path: left, op: op, value: value}
+	}
+
+	// No operator found, assume it's just a path existence check or simple value
+	// For now treating as existence check (value present)
+	return &filterExpr{path: condition, op: ""}
+}
+
+// findQueryOperator finds the query operator in the condition string
+func findQueryOperator(condition string) (string, int) {
 	// Track parentheses depth
 	depth := 0
 	inString := false
 	var stringChar byte
+
+	possibleOps := []string{"==", "!=", ">=", "<=", ">", "<", "=~", "!~", "%", "!%"}
 
 	for i := 0; i < len(condition); i++ {
 		c := condition[i]
@@ -2913,8 +3041,8 @@ func parseQueryCondition(condition string) *filterExpr {
 			continue
 		}
 		if inString {
-			if c == '\\' && i+1 < len(condition) {
-				i++ // Skip escaped char
+			if c == '\\' {
+				i++ // skip escaped char
 				continue
 			}
 			if c == stringChar {
@@ -2923,64 +3051,40 @@ func parseQueryCondition(condition string) *filterExpr {
 			continue
 		}
 
-		// Track depth
+		// Track parenthesis depth
 		if c == '(' {
 			depth++
 			continue
 		}
 		if c == ')' {
-			depth--
+			if depth > 0 {
+				depth--
+			}
 			continue
 		}
 
-		// Only look for operators at depth 0
-		if depth > 0 {
-			continue
-		}
-
-		// Check for operators at this position
-		operators := []string{"==", "!=", ">=", "<=", ">", "<", "!%", "%"}
-		for _, operator := range operators {
-			if i+len(operator) <= len(condition) && condition[i:i+len(operator)] == operator {
-				opIdx = i
-				op = operator
-				break
+		// Check for operators at depth 0
+		if depth == 0 {
+			if op, found := checkQueryOperator(condition, i, c, possibleOps); found {
+				return op, i
 			}
 		}
-		if opIdx != -1 {
-			break
-		}
 	}
+	return "", -1
+}
 
-	// If no operator found at depth 0, the entire condition is the path (for nested queries)
-	if opIdx == -1 {
-		// Could be a simple value check like #(=="fb") or a path like #(nets.#(=="fb"))
-		// Check if it starts with an operator
-		for _, operator := range []string{"==", "!=", ">=", "<=", ">", "<", "!%", "%"} {
-			if strings.HasPrefix(condition, operator) {
-				return &filterExpr{
-					path:  "",
-					op:    operator,
-					value: cleanQueryValue(condition[len(operator):]),
-				}
+// checkQueryOperator checks if an operator starts at current position
+func checkQueryOperator(condition string, i int, c byte, possibleOps []string) (string, bool) {
+	// Check longest operators first to avoid partial matches
+	// Optimization: only check if character matches start of an operator
+	if c == '=' || c == '!' || c == '>' || c == '<' || c == '%' {
+		for _, op := range possibleOps {
+			if strings.HasPrefix(condition[i:], op) {
+				return op, true
 			}
 		}
-		// Entire condition is a path - for nested queries, evaluate as existence
-		return &filterExpr{
-			path: condition,
-			op:   "",
-		}
 	}
-
-	// Split into path and value
-	path := strings.TrimSpace(condition[:opIdx])
-	value := strings.TrimSpace(condition[opIdx+len(op):])
-
-	return &filterExpr{
-		path:  path,
-		op:    op,
-		value: cleanQueryValue(value),
-	}
+	return "", false
 }
 
 // cleanQueryValue removes quotes from query values
@@ -3301,13 +3405,8 @@ func fastCountArrayElements(data []byte) int {
 		return 0
 	}
 
-	// Skip opening bracket
-	pos := 1
-
-	// Skip whitespace
-	for pos < len(data) && (data[pos] == ' ' || data[pos] == '\t' || data[pos] == '\n' || data[pos] == '\r') {
-		pos++
-	}
+	// Skip opening bracket and whitespace
+	pos := skipWhitespaceSimple(data, 1)
 
 	// Check for empty array
 	if pos < len(data) && data[pos] == ']' {
@@ -3320,65 +3419,81 @@ func fastCountArrayElements(data []byte) int {
 	for pos < len(data) {
 		c := data[pos]
 
-		switch c {
-		case ' ', '\t', '\n', '\r':
-			pos++
-			continue
-		case '[', '{':
+		if c == '"' {
 			if depth == 0 && count == 0 {
 				count = 1
 			}
-			depth++
+			pos = skipQuotedString(data, pos)
+			continue
+		}
+
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
 			pos++
 			continue
-		case ']':
-			if depth == 0 {
-				return count
-			}
-			depth--
-			pos++
-			continue
-		case '}':
-			if depth > 0 {
-				depth--
-			}
-			pos++
-			continue
-		case '"':
-			// Count this element if at depth 0 and first char
-			if depth == 0 && count == 0 {
-				count = 1
-			}
-			// Skip string
-			pos++
-			for pos < len(data) {
-				if data[pos] == '\\' {
-					pos += 2
-					continue
-				}
-				if data[pos] == '"' {
-					pos++
-					break
-				}
-				pos++
-			}
-			continue
-		case ',':
-			if depth == 0 {
-				count++
-			}
-			pos++
-			continue
-		default:
-			// Count this element if at depth 0 and we haven't counted yet
-			if depth == 0 && count == 0 {
-				count = 1
-			}
-			pos++
+		}
+
+		// Update count and depth based on character
+		count, depth, pos = processArrayCountChar(c, count, depth, pos)
+
+		// If returned from top level array
+		if depth < 0 {
+			// Check if we just closed top level array
+			// depth starts at 0 inside the array scanning loop because we skipped the opening [
+			// Wait, the logic below handles depth relative to inside.
+			// Original logic: initial depth 0 (inside array). ] at depth 0 returns count.
+			// Let's match that.
+			return count
 		}
 	}
 
 	return count
+}
+
+// processArrayCountChar updates state based on character
+func processArrayCountChar(c byte, count, depth, pos int) (int, int, int) {
+	switch c {
+	case '[', '{':
+		if depth == 0 && count == 0 {
+			count = 1
+		}
+		return count, depth + 1, pos + 1
+	case ']':
+		if depth == 0 {
+			return count, -1, pos + 1 // Signal return
+		}
+		return count, depth - 1, pos + 1
+	case '}':
+		if depth > 0 {
+			return count, depth - 1, pos + 1
+		}
+		return count, depth, pos + 1
+	case ',':
+		if depth == 0 {
+			return count + 1, depth, pos + 1
+		}
+		return count, depth, pos + 1
+	default:
+		if depth == 0 && count == 0 {
+			count = 1
+		}
+		return count, depth, pos + 1
+	}
+}
+
+// skipQuotedString skips a quoted string starting at pos (including the opening quote)
+func skipQuotedString(data []byte, pos int) int {
+	pos++ // Skip opening quote
+	for pos < len(data) {
+		if data[pos] == '\\' {
+			pos += 2
+			continue
+		}
+		if data[pos] == '"' {
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
 }
 
 // processWildcardCollection handles wildcard collection processing
@@ -3882,8 +3997,6 @@ func recursiveSearch(current Result, remainingTokens []pathToken) Result {
 }
 
 // applyModifier applies a modifier to a result
-//
-//nolint:gocyclo
 func applyModifier(result Result, modifier string) Result {
 	// Parse modifier and argument
 	parts := strings.SplitN(modifier, ":", 2)
@@ -3893,89 +4006,24 @@ func applyModifier(result Result, modifier string) Result {
 		arg = parts[1]
 	}
 
-	switch name {
-	case constString, "str":
-		return applyStringModifier(result)
-	case constNumber, "num":
-		return applyNumberModifier(result)
-	case constBool, constBoolean:
-		return applyBooleanModifier(result)
-	case "keys":
-		return applyKeysModifier(result)
-	case "values":
-		return applyValuesModifier(result)
-	case "length", "count", "len":
-		return applyLengthModifier(result)
-	case "type":
-		return applyTypeModifier(result)
-	case "base64":
-		return applyBase64Modifier(result)
-	case "base64decode":
-		return applyBase64DecodeModifier(result)
-	case "lower":
-		return applyLowerModifier(result)
-	case "upper":
-		return applyUpperModifier(result)
-	case "join":
-		return applyJoinModifier(result, arg)
-	case "reverse":
-		return applyReverseModifier(result)
-	case "flatten":
-		return applyFlattenModifier(result)
-	case "distinct", "unique":
-		return applyDistinctModifier(result)
-	case "sort":
-		return applySortModifier(result, arg)
-	case "first":
-		return applyFirstModifier(result)
-	case "last":
-		return applyLastModifier(result)
-	case "sum":
-		return applySumModifier(result)
-	case "avg", "average", "mean":
-		return applyAverageModifier(result)
-	case "min":
-		return applyMinModifier(result)
-	case "max":
-		return applyMaxModifier(result)
-	case "this":
-		return applyThisModifier(result)
-	case "valid":
-		return applyValidModifier(result)
-	case "pretty":
-		return applyPrettyModifier(result, arg)
-	case "ugly":
-		return applyUglyModifier(result)
-	// Advanced transformation modifiers
-	case "group", "groupby":
-		return applyGroupModifier(result, arg)
-	case "sortby":
-		return applySortByModifier(result, arg)
-	case "map", "project":
-		return applyMapModifier(result, arg)
-	case "uniqueby":
-		return applyUniqueByModifier(result, arg)
-	// Additional jq-style modifiers
-	case "slice":
-		return applySliceModifier(result, arg)
-	case "has":
-		return applyHasModifier(result, arg)
-	case "contains":
-		return applyContainsModifier(result, arg)
-	case "split":
-		return applySplitModifier(result, arg)
-	case "startswith":
-		return applyStartsWithModifier(result, arg)
-	case "endswith":
-		return applyEndsWithModifier(result, arg)
-	case "entries", "toentries":
-		return applyEntriesToModifier(result)
-	case "fromentries":
-		return applyFromEntriesModifier(result)
-	case "any":
-		return applyAnyModifier(result)
-	case "all":
-		return applyAllModifier(result)
+	// Try each category of modifiers
+	if r, ok := applyTypeConversionModifier(result, name); ok {
+		return r
+	}
+	if r, ok := applyCollectionModifier(result, name, arg); ok {
+		return r
+	}
+	if r, ok := applyAggregateModifier(result, name); ok {
+		return r
+	}
+	if r, ok := applyFormattingModifier(result, name, arg); ok {
+		return r
+	}
+	if r, ok := applyAdvancedModifier(result, name, arg); ok {
+		return r
+	}
+	if r, ok := applyJQStyleModifier(result, name, arg); ok {
+		return r
 	}
 
 	// Check for custom modifiers
@@ -3983,8 +4031,129 @@ func applyModifier(result Result, modifier string) Result {
 		return customFn(result, arg)
 	}
 
-	// Return original result if no modifier was applied
 	return result
+}
+
+// applyTypeConversionModifier handles type conversion modifiers
+func applyTypeConversionModifier(result Result, name string) (Result, bool) {
+	switch name {
+	case constString, "str":
+		return applyStringModifier(result), true
+	case constNumber, "num":
+		return applyNumberModifier(result), true
+	case constBool, constBoolean:
+		return applyBooleanModifier(result), true
+	case "type":
+		return applyTypeModifier(result), true
+	}
+	return Result{}, false
+}
+
+// applyCollectionModifier handles collection/array modifiers
+func applyCollectionModifier(result Result, name, arg string) (Result, bool) {
+	switch name {
+	case "keys":
+		return applyKeysModifier(result), true
+	case "values":
+		return applyValuesModifier(result), true
+	case "length", "count", "len":
+		return applyLengthModifier(result), true
+	case "reverse":
+		return applyReverseModifier(result), true
+	case "flatten":
+		return applyFlattenModifier(result), true
+	case "distinct", "unique":
+		return applyDistinctModifier(result), true
+	case "sort":
+		return applySortModifier(result, arg), true
+	case "first":
+		return applyFirstModifier(result), true
+	case "last":
+		return applyLastModifier(result), true
+	case "join":
+		return applyJoinModifier(result, arg), true
+	}
+	return Result{}, false
+}
+
+// applyAggregateModifier handles aggregate modifiers
+func applyAggregateModifier(result Result, name string) (Result, bool) {
+	switch name {
+	case "sum":
+		return applySumModifier(result), true
+	case "avg", "average", "mean":
+		return applyAverageModifier(result), true
+	case "min":
+		return applyMinModifier(result), true
+	case "max":
+		return applyMaxModifier(result), true
+	}
+	return Result{}, false
+}
+
+// applyFormattingModifier handles formatting modifiers
+func applyFormattingModifier(result Result, name, arg string) (Result, bool) {
+	switch name {
+	case "base64":
+		return applyBase64Modifier(result), true
+	case "base64decode":
+		return applyBase64DecodeModifier(result), true
+	case "lower":
+		return applyLowerModifier(result), true
+	case "upper":
+		return applyUpperModifier(result), true
+	case "this":
+		return applyThisModifier(result), true
+	case "valid":
+		return applyValidModifier(result), true
+	case "pretty":
+		return applyPrettyModifier(result, arg), true
+	case "ugly":
+		return applyUglyModifier(result), true
+	}
+	return Result{}, false
+}
+
+// applyAdvancedModifier handles advanced transformation modifiers
+func applyAdvancedModifier(result Result, name, arg string) (Result, bool) {
+	switch name {
+	case "group", "groupby":
+		return applyGroupModifier(result, arg), true
+	case "sortby":
+		return applySortByModifier(result, arg), true
+	case "map", "project":
+		return applyMapModifier(result, arg), true
+	case "uniqueby":
+		return applyUniqueByModifier(result, arg), true
+	}
+	return Result{}, false
+}
+
+// applyJQStyleModifier handles jq-style modifiers
+func applyJQStyleModifier(result Result, name, arg string) (Result, bool) {
+	switch name {
+	case "slice":
+		return applySliceModifier(result, arg), true
+	case "has":
+		return applyHasModifier(result, arg), true
+	case "contains":
+		return applyContainsModifier(result, arg), true
+	case "split":
+		return applySplitModifier(result, arg), true
+	case "startswith":
+		return applyStartsWithModifier(result, arg), true
+	case "endswith":
+		return applyEndsWithModifier(result, arg), true
+	case "entries", "toentries":
+		return applyEntriesToModifier(result), true
+	case "fromentries":
+		return applyFromEntriesModifier(result), true
+	case "any":
+		return applyAnyModifier(result), true
+	case "all":
+		return applyAllModifier(result), true
+	}
+	return Result{}, false
 }
 
 // applyStringModifier converts result to string type
@@ -4723,6 +4892,23 @@ func applySliceModifier(result Result, arg string) Result {
 		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
 	}
 
+	start, end := parseSliceIndices(arg, n)
+
+	if start >= end || start >= n {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+
+	sliced := items[start:end]
+	slicedResult := buildWildcardResult(sliced)
+	if slicedResult.Type == TypeUndefined {
+		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
+	}
+	slicedResult.Modified = true
+	return slicedResult
+}
+
+// parseSliceIndices parses slice arguments and clamps to bounds
+func parseSliceIndices(arg string, n int) (int, int) {
 	// Parse start:end from arg
 	start, end := 0, n
 	if arg != "" {
@@ -4754,17 +4940,7 @@ func applySliceModifier(result Result, arg string) Result {
 	if end > n {
 		end = n
 	}
-	if start >= end || start >= n {
-		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
-	}
-
-	sliced := items[start:end]
-	slicedResult := buildWildcardResult(sliced)
-	if slicedResult.Type == TypeUndefined {
-		return Result{Type: TypeArray, Raw: []byte("[]"), Modified: true}
-	}
-	slicedResult.Modified = true
-	return slicedResult
+	return start, end
 }
 
 // applyHasModifier checks if an object has a field or array has index
@@ -5043,6 +5219,30 @@ func buildNumberResult(value float64) Result {
 	}
 }
 
+// skipWhitespaceSimple skips whitespace and returns the new position
+func skipWhitespaceSimple(data []byte, i int) int {
+	for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+// isComplexValueStart checks if a byte starts a complex JSON value
+func isComplexValueStart(b byte) bool {
+	return b == '{' || b == '[' || b == '"' || b == 't' || b == 'f' || b == 'n'
+}
+
+// scanNumber scans a number from data starting at position i
+// Returns the parsed number, new position, and success flag
+func scanNumber(data []byte, i int) (float64, int, bool) {
+	start := i
+	for i < len(data) && isNumberChar(data[i]) {
+		i++
+	}
+	num, err := strconv.ParseFloat(string(data[start:i]), 64)
+	return num, i, err == nil
+}
+
 // scanArrayNumbersFast scans raw JSON array bytes and extracts numbers directly
 // without creating Result objects. Returns sum and count.
 // Returns (0, 0) if the array contains non-numeric or complex values.
@@ -5053,40 +5253,26 @@ func scanArrayNumbersFast(data []byte) (sum float64, count int) {
 
 	i := 1 // Skip opening '['
 	for i < len(data) {
-		// Skip whitespace
-		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
-			i++
-		}
+		i = skipWhitespaceSimple(data, i)
 		if i >= len(data) || data[i] == ']' {
 			break
 		}
 
-		// Check for number start (digit, minus, or dot)
-		if (data[i] >= '0' && data[i] <= '9') || data[i] == '-' || data[i] == '.' {
-			start := i
-			// Scan the number
-			for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.' || data[i] == '-' || data[i] == 'e' || data[i] == 'E' || data[i] == '+') {
-				i++
+		// Check for number start
+		if isNumberStart(data[i]) {
+			num, newPos, ok := scanNumber(data, i)
+			if !ok {
+				return 0, 0
 			}
-			// Parse the number
-			if num, err := strconv.ParseFloat(string(data[start:i]), 64); err == nil {
-				sum += num
-				count++
-			} else {
-				return 0, 0 // Failed to parse, bail out
-			}
-		} else if data[i] == '{' || data[i] == '[' || data[i] == '"' {
-			// Complex value (object, nested array, or string) - bail to fallback
-			return 0, 0
-		} else if data[i] == 't' || data[i] == 'f' || data[i] == 'n' {
-			// Boolean or null - bail to fallback
-			return 0, 0
+			sum += num
+			count++
+			i = newPos
+		} else if isComplexValueStart(data[i]) {
+			return 0, 0 // Complex value, bail
 		}
 
 		// Skip whitespace and comma
-		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
-			i++
-		}
+		i = skipWhitespaceSimple(data, i)
 		if i < len(data) && data[i] == ',' {
 			i++
 		}
@@ -5095,7 +5281,6 @@ func scanArrayNumbersFast(data []byte) (sum float64, count int) {
 	return sum, count
 }
 
-// scanArrayMinMaxFast scans raw JSON array bytes and finds min/max directly
 func scanArrayMinMaxFast(data []byte, findMin bool) (value float64, found bool) {
 	if len(data) < 2 || data[0] != '[' {
 		return 0, false
@@ -5103,46 +5288,51 @@ func scanArrayMinMaxFast(data []byte, findMin bool) (value float64, found bool) 
 
 	i := 1
 	for i < len(data) {
-		// Skip whitespace
-		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
-			i++
-		}
+		i = skipWhitespaceSimple(data, i)
 		if i >= len(data) || data[i] == ']' {
 			break
 		}
 
 		// Check for number
-		if (data[i] >= '0' && data[i] <= '9') || data[i] == '-' || data[i] == '.' {
-			start := i
-			for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.' || data[i] == '-' || data[i] == 'e' || data[i] == 'E' || data[i] == '+') {
-				i++
-			}
-			if num, err := strconv.ParseFloat(string(data[start:i]), 64); err == nil {
-				if !found {
-					value = num
-					found = true
-				} else if findMin && num < value {
-					value = num
-				} else if !findMin && num > value {
-					value = num
-				}
-			} else {
+		if isNumberStart(data[i]) {
+			var ok bool
+			value, found, i, ok = processMinMaxNumber(data, i, value, found, findMin)
+			if !ok {
 				return 0, false
 			}
-		} else if data[i] == '{' || data[i] == '[' || data[i] == '"' || data[i] == 't' || data[i] == 'f' || data[i] == 'n' {
+		} else if isComplexValueStart(data[i]) {
 			return 0, false // Complex value, bail
 		}
 
 		// Skip comma
-		for i < len(data) && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n' || data[i] == '\r') {
-			i++
-		}
+		i = skipWhitespaceSimple(data, i)
 		if i < len(data) && data[i] == ',' {
 			i++
 		}
 	}
 
 	return value, found
+}
+
+// processMinMaxNumber scans a number and updates min/max value
+func processMinMaxNumber(data []byte, i int, currentVal float64, found, findMin bool) (float64, bool, int, bool) {
+	num, newPos, ok := scanNumber(data, i)
+	if !ok {
+		return 0, false, i, false
+	}
+	if !found {
+		return num, true, newPos, true
+	}
+	if findMin {
+		if num < currentVal {
+			return num, true, newPos, true
+		}
+	} else {
+		if num > currentVal {
+			return num, true, newPos, true
+		}
+	}
+	return currentVal, true, newPos, true
 }
 
 // applyThisModifier returns the result unchanged (@this)
@@ -5570,7 +5760,9 @@ func skipToNextArrayElement(data []byte, pos int) (int, bool) {
 // getArrayElementRange returns the start and end indices (relative to data) of the element at index within an array.
 // Returns (-1, -1) when out of bounds or data is not an array.
 //
-//nolint:gocyclo
+// getArrayElementRange returns the start and end position of the element at index
+//
+//go:inline
 func getArrayElementRange(data []byte, index int) (int, int) {
 	pos, isArray := findArrayElementStart(data)
 	if !isArray {
@@ -5578,75 +5770,8 @@ func getArrayElementRange(data []byte, index int) (int, int) {
 	}
 
 	// Statistical jump for large indices
-	// Use statistical estimation to jump closer to target index
 	if index > 100 && len(data) > 10000 {
-		// Estimate element size by sampling first few elements
-		sampleSize := 10
-		samplePos := pos
-		elementsScanned := 0
-		totalSize := 0
-
-		for elementsScanned < sampleSize && samplePos < len(data) {
-			// Skip whitespace
-			for ; samplePos < len(data) && data[samplePos] <= ' '; samplePos++ {
-			}
-			if samplePos >= len(data) || data[samplePos] == ']' {
-				break
-			}
-
-			elemStart := samplePos
-			elemEnd := findValueEnd(data, samplePos)
-			if elemEnd == -1 {
-				break
-			}
-
-			totalSize += elemEnd - elemStart
-			samplePos = elemEnd
-
-			// Skip comma and whitespace
-			for ; samplePos < len(data) && data[samplePos] <= ' '; samplePos++ {
-			}
-			if samplePos < len(data) && data[samplePos] == ',' {
-				samplePos++
-			}
-
-			elementsScanned++
-		}
-
-		if elementsScanned > 0 {
-			// Calculate average element size
-			avgSize := totalSize / elementsScanned
-
-			// Jump to estimated position
-			jumpPos := pos + (avgSize+2)*(index-elementsScanned) // +2 for comma and space
-			if jumpPos < len(data) && jumpPos > pos {
-				// Count actual elements from jump position backward to refine
-				commaCount := 0
-				for i := pos; i < jumpPos && i < len(data); i++ {
-					if data[i] == ',' {
-						commaCount++
-					}
-				}
-
-				// Adjust position based on comma count
-				if commaCount > index {
-					// Overshot, go back
-					//nolint:ineffassign
-					jumpPos = pos
-				} else {
-					// Use comma count as starting point
-					pos = jumpPos
-					// Back up to last known comma
-					for pos > 0 && data[pos] != ',' {
-						pos--
-					}
-					if pos > 0 {
-						pos++ // After comma
-					}
-					index = index - commaCount
-				}
-			}
-		}
+		pos, index = performOptimizedJump(data, pos, index)
 	}
 
 	// Linear scan from current position (either start or jumped position)
@@ -5675,6 +5800,95 @@ func getArrayElementRange(data []byte, index int) (int, int) {
 		currentIndex++
 	}
 	return -1, -1
+}
+
+// performOptimizedJump attempts to jump closer to the target index using statistical estimation
+func performOptimizedJump(data []byte, pos, index int) (int, int) {
+	// Estimate element size by sampling first few elements
+	avgSize, elementsScanned := calculateAverageElementSize(data, pos)
+
+	if elementsScanned > 0 {
+		// Jump to estimated position
+		jumpPos := calculateJumpPosition(pos, avgSize, index, elementsScanned)
+
+		if jumpPos < len(data) && jumpPos > pos {
+			return refineJumpPosition(data, pos, jumpPos, index)
+		}
+	}
+	return pos, index
+}
+
+// calculateAverageElementSize samples the first few elements to estimate size
+func calculateAverageElementSize(data []byte, pos int) (int, int) {
+	sampleSize := 10
+	samplePos := pos
+	elementsScanned := 0
+	totalSize := 0
+
+	for elementsScanned < sampleSize && samplePos < len(data) {
+		// Skip whitespace
+		for ; samplePos < len(data) && data[samplePos] <= ' '; samplePos++ {
+		}
+		if samplePos >= len(data) || data[samplePos] == ']' {
+			break
+		}
+
+		elemStart := samplePos
+		elemEnd := findValueEnd(data, samplePos)
+		if elemEnd == -1 {
+			break
+		}
+
+		totalSize += elemEnd - elemStart
+		samplePos = elemEnd
+
+		// Skip comma and whitespace
+		for ; samplePos < len(data) && data[samplePos] <= ' '; samplePos++ {
+		}
+		if samplePos < len(data) && data[samplePos] == ',' {
+			samplePos++
+		}
+
+		elementsScanned++
+	}
+
+	if elementsScanned > 0 {
+		return totalSize / elementsScanned, elementsScanned
+	}
+	return 0, 0
+}
+
+// calculateJumpPosition determines the byte offset to jump to
+func calculateJumpPosition(pos, avgSize, index, elementsScanned int) int {
+	return pos + (avgSize+2)*(index-elementsScanned) // +2 for comma and space
+}
+
+// refineJumpPosition adjusts position based on actual comma count from start
+func refineJumpPosition(data []byte, startPos, jumpPos, targetIndex int) (int, int) {
+	// Count actual elements from jump position backward to refine
+	commaCount := 0
+	for i := startPos; i < jumpPos && i < len(data); i++ {
+		if data[i] == ',' {
+			commaCount++
+		}
+	}
+
+	// Adjust position based on comma count
+	if commaCount > targetIndex {
+		// Overshot, go back - use original pos
+		return startPos, targetIndex
+	}
+
+	// Use comma count as starting point
+	newPos := jumpPos
+	// Back up to last known comma
+	for newPos > 0 && data[newPos] != ',' {
+		newPos--
+	}
+	if newPos > 0 {
+		newPos++ // After comma
+	}
+	return newPos, targetIndex - commaCount
 }
 
 // findValueEnd finds the end position of a JSON value
@@ -5816,8 +6030,11 @@ func findBlockEnd(data []byte, start int, openChar, closeChar byte) int {
 // findStringEnd finds the end of a JSON string, handling escapes
 // skipValue - Fast value skipping without parsing
 // Used for efficiently skipping unwanted key-value pairs
+// findStringEnd finds the end of a JSON string, handling escapes
+// skipValue - Fast value skipping without parsing
+// Used for efficiently skipping unwanted key-value pairs
 //
-//nolint:gocyclo
+//go:inline
 func skipValue(data []byte, i int) int {
 	// Skip leading whitespace
 	for ; i < len(data) && data[i] <= ' '; i++ {
@@ -5828,101 +6045,15 @@ func skipValue(data []byte, i int) int {
 	}
 
 	switch data[i] {
-	case '"': // String
-		i++
-		for ; i < len(data); i++ {
-			if data[i] == '\\' && i+1 < len(data) {
-				i++ // Skip escaped char
-				continue
-			}
-			if data[i] == '"' {
-				return i + 1
-			}
-		}
-		return i
-
-	case '{': // Object
-		i++
-		depth := 1
-		inString := false
-		for ; i < len(data) && depth > 0; i++ {
-			if inString {
-				if data[i] == '\\' && i+1 < len(data) {
-					i++
-					continue
-				}
-				if data[i] == '"' {
-					inString = false
-				}
-			} else {
-				switch data[i] {
-				case '"':
-					inString = true
-				case '{':
-					depth++
-				case '}':
-					depth--
-				}
-			}
-		}
-		return i
-
-	case '[': // Array
-		i++
-		depth := 1
-		inString := false
-		for ; i < len(data) && depth > 0; i++ {
-			if inString {
-				if data[i] == '\\' && i+1 < len(data) {
-					i++
-					continue
-				}
-				if data[i] == '"' {
-					inString = false
-				}
-			} else {
-				switch data[i] {
-				case '"':
-					inString = true
-				case '[':
-					depth++
-				case ']':
-					depth--
-				}
-			}
-		}
-		return i
-
-	case 't': // true
-		if i+3 < len(data) && data[i+1] == 'r' && data[i+2] == 'u' && data[i+3] == 'e' {
-			return i + 4
-		}
-		return i + 1
-
-	case 'f': // false
-		if i+4 < len(data) && data[i+1] == 'a' && data[i+2] == 'l' && data[i+3] == 's' && data[i+4] == 'e' {
-			return i + 5
-		}
-		return i + 1
-
-	case 'n': // null
-		if i+3 < len(data) && data[i+1] == 'u' && data[i+2] == 'l' && data[i+3] == 'l' {
-			return i + 4
-		}
-		return i + 1
-
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': // Number
-		i++
-		for ; i < len(data); i++ {
-			c := data[i]
-			if (c < '0' || c > '9') && c != '.' && c != 'e' && c != 'E' && c != '+' && c != '-' {
-				return i
-			}
-		}
-		return i
+	case '"':
+		return skipStringValue(data, i)
+	case '{':
+		return skipObjectValue(data, i)
+	case '[':
+		return skipArrayValue(data, i)
+	default:
+		return skipPrimitiveValue(data, i)
 	}
-
-	return i
 }
 
 func findStringEnd(data []byte, start int) int {

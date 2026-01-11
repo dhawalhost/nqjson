@@ -2833,7 +2833,6 @@ func deleteFromParent(parent interface{}, key string, index int, isArray bool) b
 	return deleteFromObjectParent(parent, key)
 }
 
-// parseSetPath parses a path string into segments for compiled paths
 func parseSetPath(path string) ([]setPathSegment, error) {
 	if path == "" {
 		return nil, ErrInvalidPath
@@ -2848,78 +2847,90 @@ func parseSetPath(path string) ([]setPathSegment, error) {
 			continue
 		}
 
-		// Unescape and handle colon prefix
-		unescaped := unescapePath(part)
-		forceObjectKey := hasColonPrefix(unescaped)
-		if forceObjectKey {
-			unescaped = stripColonPrefix(unescaped)
+		partSegments, err := processSetPathPart(part, i == len(parts)-1)
+		if err != nil {
+			return nil, err
 		}
-
-		// Check if this is the last segment
-		isLast := i == len(parts)-1
-
-		// Handle array access [n]
-		if strings.Contains(unescaped, "[") {
-			base := unescaped[:strings.Index(unescaped, "[")]
-
-			// Add the base key if it exists
-			if base != "" {
-				segments = append(segments, setPathSegment{
-					key:   base,
-					index: -1,
-					last:  false,
-				})
-			}
-
-			// Process array indexes
-			start := strings.Index(unescaped, "[")
-			for start != -1 && start < len(unescaped) {
-				end := strings.Index(unescaped[start:], "]")
-				if end == -1 {
-					return nil, ErrInvalidPath
-				}
-				end += start
-
-				// Get array index (supports negative indices like -1)
-				indexStr := unescaped[start+1 : end]
-				if !isNumericIndex(indexStr) {
-					return nil, ErrInvalidPath
-				}
-				idx, err := strconv.Atoi(indexStr)
-				if err != nil {
-					return nil, ErrInvalidPath
-				}
-
-				// Add the index segment
-				isLastIndex := isLast && end+1 >= len(unescaped)
-				segments = append(segments, setPathSegment{
-					key:   "",
-					index: idx,
-					last:  isLastIndex,
-				})
-
-				// Move to next bracket if any
-				if end+1 < len(unescaped) {
-					start = strings.Index(unescaped[end+1:], "[")
-					if start != -1 {
-						start += end + 1
-					}
-				} else {
-					start = -1
-				}
-			}
-		} else {
-			// Simple key or numeric index (dot-separated)
-			// Only treat as numeric if NOT forced as object key
-			if !forceObjectKey && isNumericIndex(unescaped) {
-				idx, _ := strconv.Atoi(unescaped)
-				segments = append(segments, setPathSegment{key: "", index: idx, last: isLast})
-			} else {
-				segments = append(segments, setPathSegment{key: unescaped, index: -1, last: isLast})
-			}
-		}
+		segments = append(segments, partSegments...)
 	}
 
+	return segments, nil
+}
+
+func processSetPathPart(part string, isLast bool) ([]setPathSegment, error) {
+	// Unescape and handle colon prefix
+	unescaped := unescapePath(part)
+	forceObjectKey := hasColonPrefix(unescaped)
+	if forceObjectKey {
+		unescaped = stripColonPrefix(unescaped)
+	}
+
+	// Handle array access [n]
+	if strings.Contains(unescaped, "[") {
+		return parseBracketNotation(unescaped, isLast)
+	}
+
+	// Simple key or numeric index (dot-separated)
+	// Only treat as numeric if NOT forced as object key
+	if !forceObjectKey && isNumericIndex(unescaped) {
+		idx, _ := strconv.Atoi(unescaped)
+		return []setPathSegment{{key: "", index: idx, last: isLast}}, nil
+	}
+
+	return []setPathSegment{{key: unescaped, index: -1, last: isLast}}, nil
+}
+
+func parseBracketNotation(unescaped string, isLast bool) ([]setPathSegment, error) {
+	var segments []setPathSegment
+	base := unescaped[:strings.Index(unescaped, "[")]
+
+	// Add the base key if it exists
+	if base != "" {
+		segments = append(segments, setPathSegment{
+			key:   base,
+			index: -1,
+			last:  false,
+		})
+	}
+
+	// Process array indexes
+	start := strings.Index(unescaped, "[")
+	for start != -1 && start < len(unescaped) {
+		end := strings.Index(unescaped[start:], "]")
+		if end == -1 {
+			return nil, ErrInvalidPath
+		}
+		end += start
+
+		// Get array index (supports negative indices like -1)
+		indexStr := unescaped[start+1 : end]
+		if !isNumericIndex(indexStr) {
+			return nil, ErrInvalidPath
+		}
+		idx, err := strconv.Atoi(indexStr)
+		if err != nil {
+			return nil, ErrInvalidPath
+		}
+
+		// Add the index segment
+		// Check if this is the last bracket in the string AND the part was the last part of path
+		isLastIndex := isLast && end+1 >= len(unescaped)
+		segments = append(segments, setPathSegment{
+			key:   "",
+			index: idx,
+			last:  isLastIndex,
+		})
+
+		// Move to next bracket if any
+		if end+1 < len(unescaped) {
+			start = strings.Index(unescaped[end+1:], "[")
+			if start != -1 {
+				start += end + 1
+			}
+		} else {
+			start = -1
+		}
+	}
 	return segments, nil
 }
 
@@ -3389,10 +3400,20 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 	}
 
 	// Navigate to the target location
+	baseOffset, window, ok := navigateToPathContainer(data, parts[:len(parts)-1])
+	if !ok {
+		return nil, false, nil
+	}
+
+	// Now set the final key
+	return replaceValueInContainer(data, baseOffset, window, parts[len(parts)-1], encodedValue)
+}
+
+func navigateToPathContainer(data []byte, pathParts []string) (int, []byte, bool) {
 	window := data
 	baseOffset := 0
 
-	for _, part := range parts[:len(parts)-1] {
+	for _, part := range pathParts {
 		// Check for colon prefix before unescaping (determines object vs array access)
 		forceObjKey := hasColonPrefix(part)
 		// Unescape and strip colon prefix
@@ -3413,17 +3434,18 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 		}
 
 		if start < 0 {
-			return nil, false, nil // Path doesn't exist
+			return 0, nil, false // Path doesn't exist
 		}
 
 		baseOffset += start
 		window = window[start:end]
 	}
+	return baseOffset, window, true
+}
 
-	// Now set the final key
-	rawFinalKey := parts[len(parts)-1]
+func replaceValueInContainer(data []byte, baseOffset int, window []byte, lastPart string, encodedValue []byte) ([]byte, bool, error) {
 	// Unescape and strip colon prefix for final key
-	finalKey := unescapePath(rawFinalKey)
+	finalKey := unescapePath(lastPart)
 	forceObjectKey := hasColonPrefix(finalKey)
 	if forceObjectKey {
 		finalKey = stripColonPrefix(finalKey)
@@ -3446,6 +3468,9 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 		if valueStart < 0 {
 			return nil, false, nil
 		}
+
+		// For arrays, we just replace the value
+		keyStart = valueStart // No separate key storage in array replacement logic here
 	} else {
 		// Object key replacement
 		keyStart, valueStart, valueEnd = findKeyValueRange(window, finalKey)
@@ -3454,14 +3479,16 @@ func setFastSimpleDotPath(data []byte, path string, value interface{}) ([]byte, 
 		}
 	}
 
-	// Build result with single allocation
-	totalOffset := baseOffset + valueStart
-	resultSize := len(data) - (valueEnd - valueStart) + len(encodedValue)
+	absValueStart := baseOffset + valueStart
+	absValueEnd := baseOffset + valueEnd
+
+	// Build result
+	resultSize := len(data) - (absValueEnd - absValueStart) + len(encodedValue)
 	result := make([]byte, 0, resultSize)
 
-	result = append(result, data[:totalOffset]...)
+	result = append(result, data[:absValueStart]...)
 	result = append(result, encodedValue...)
-	result = append(result, data[baseOffset+valueEnd:]...)
+	result = append(result, data[absValueEnd:]...)
 
 	return result, true, nil
 }
@@ -3899,56 +3926,8 @@ func handleDeletion(json []byte, path string, isArrayElement bool, parent interf
 		// Check if path ends with -1 (delete last element)
 		// For deletion, -1 means "last element" not "append position"
 		if strings.HasSuffix(path, ".-1") || strings.HasSuffix(path, "[-1]") {
-			// Get the array to determine actual last index
-			// The array may have been extended with nil during navigation, so we need to:
-			// 1. Get the array
-			// 2. Find the last non-nil element (or use len-1 if no nils)
-			// 3. Remove the trailing nil (if any) and then the last real element
-
-			var arr []interface{}
-			var parentMap map[string]interface{}
-
-			// Extract array from parent
-			switch p := parent.(type) {
-			case []interface{}:
-				arr = p
-			case *interface{}:
-				if m, ok := (*p).(map[string]interface{}); ok {
-					parentMap = m
-					if a, ok := m[lastKey].([]interface{}); ok {
-						arr = a
-					}
-				} else if a, ok := (*p).([]interface{}); ok {
-					arr = a
-				}
-			case map[string]interface{}:
-				parentMap = p
-				if a, ok := p[lastKey].([]interface{}); ok {
-					arr = a
-				}
-			}
-
-			if arr != nil && len(arr) > 0 {
-				// Check if the last element is nil (added during navigation for append)
-				// If so, we need to remove it first, then delete the actual last element
-				actualLen := len(arr)
-				if arr[actualLen-1] == nil {
-					actualLen-- // Don't count the nil placeholder
-				}
-
-				if actualLen > 0 {
-					// Delete the last real element
-					lastIndex = actualLen - 1
-					newArr := make([]interface{}, lastIndex)
-					copy(newArr, arr[:lastIndex])
-
-					// Update the parent's reference
-					if parentMap != nil {
-						parentMap[lastKey] = newArr
-					}
-
-					return nil, nil
-				}
+			if done, result, err := handleTrailingArrayDeletion(parent, lastKey); done {
+				return result, err
 			}
 		}
 		return handleArrayDeletion(json, path, parent, lastKey, lastIndex)
@@ -3960,6 +3939,62 @@ func handleDeletion(json []byte, path string, isArrayElement bool, parent interf
 	}
 
 	return nil, nil
+}
+
+// handleTrailingArrayDeletion removes the last element of an array
+func handleTrailingArrayDeletion(parent interface{}, lastKey string) (bool, interface{}, error) {
+	// Get the array to determine actual last index
+	// The array may have been extended with nil during navigation, so we need to:
+	// 1. Get the array
+	// 2. Find the last non-nil element (or use len-1 if no nils)
+	// 3. Remove the trailing nil (if any) and then the last real element
+
+	var arr []interface{}
+	var parentMap map[string]interface{}
+
+	// Extract array from parent
+	switch p := parent.(type) {
+	case []interface{}:
+		arr = p
+	case *interface{}:
+		if m, ok := (*p).(map[string]interface{}); ok {
+			parentMap = m
+			if a, ok := m[lastKey].([]interface{}); ok {
+				arr = a
+			}
+		} else if a, ok := (*p).([]interface{}); ok {
+			arr = a
+		}
+	case map[string]interface{}:
+		parentMap = p
+		if a, ok := p[lastKey].([]interface{}); ok {
+			arr = a
+		}
+	}
+
+	if arr != nil && len(arr) > 0 {
+		// Check if the last element is nil (added during navigation for append)
+		// If so, we need to remove it first, then delete the actual last element
+		actualLen := len(arr)
+		if arr[actualLen-1] == nil {
+			actualLen-- // Don't count the nil placeholder
+		}
+
+		if actualLen > 0 {
+			// Delete the last real element
+			lastIndex := actualLen - 1
+			newArr := make([]interface{}, lastIndex)
+			copy(newArr, arr[:lastIndex])
+
+			// Update the parent's reference
+			if parentMap != nil {
+				parentMap[lastKey] = newArr
+			}
+
+			return true, nil, nil
+		}
+	}
+	return false, nil, nil
 }
 
 // handleArrayDeletion handles deletion specifically for array elements
