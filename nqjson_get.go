@@ -359,8 +359,6 @@ func compilePath(path string) *compiledPath {
 }
 
 // parsePathSegments - Break path into executable segments
-//
-//nolint:gocyclo
 func parsePathSegments(path string) []pathSegment {
 	if path == "" {
 		return nil
@@ -477,8 +475,6 @@ func executeCompiledPath(data []byte, cp *compiledPath) Result {
 // getWithOptions is the core Get implementation with options for multipath and JSON Lines support.
 //
 // getWithOptions allows internal customization of behavior
-//
-//nolint:gocyclo
 func getWithOptions(data []byte, path string, opts getOptions) Result {
 	// Empty path should return non-existent result according to tests
 	if path == "" {
@@ -972,7 +968,6 @@ func GetMany(data []byte, paths ...string) []Result {
 // getUltraSimplePath is an ultra-fast path for very simple JSON with basic paths
 // This handles cases like {"name":"John","age":30} with path "name"
 //
-//nolint:gocyclo
 //go:inline
 func getUltraSimplePath(data []byte, path string) Result {
 	// Target: 20-30ns for single-key lookups
@@ -1435,7 +1430,6 @@ func skipWhitespaceInline(data []byte, pos int) int {
 //
 // recursive array parser
 //
-//nolint:gocyclo
 //go:inline
 //go:inline
 func parseArrayRecursive(data []byte, pos int, path string) Result {
@@ -2593,7 +2587,6 @@ type filterExpr struct {
 // and not immediately following a '.'. This preserves cases like "users.@length" as invalid
 // path segments and avoids interference with filter "@.field" usage.
 //
-//nolint:gocyclo
 //go:inline
 func parseModifiers(path string) ([]pathToken, string, string) {
 	// Fast path: if neither '|' nor '@' present, return early
@@ -2730,26 +2723,6 @@ func splitModifierParts(s string) []string {
 }
 
 // isEscapedAt reports whether the character at position pos is escaped by a preceding backslash.
-func isEscapedAt(s string, pos int) bool {
-	if pos <= 0 || pos >= len(s) {
-		return false
-	}
-	count := 0
-	for i := pos - 1; i >= 0 && s[i] == '\\'; i-- {
-		count++
-	}
-	return count%2 == 1
-}
-
-// hasUnescapedChar reports if the target character appears unescaped in the string.
-func hasUnescapedChar(s string, target byte) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == target && !isEscapedAt(s, i) {
-			return true
-		}
-	}
-	return false
-}
 
 // isModifierName checks if a string is a known modifier name
 func isModifierName(s string) bool {
@@ -3088,13 +3061,6 @@ func checkQueryOperator(condition string, i int, c byte, possibleOps []string) (
 }
 
 // cleanQueryValue removes quotes from query values
-func cleanQueryValue(value string) string {
-	value = strings.TrimSpace(value)
-	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-		return value[1 : len(value)-1]
-	}
-	return value
-}
 
 // parseFilterExpression parses a filter expression like '?(@.age>30)'
 func parseFilterExpression(expr string) *filterExpr {

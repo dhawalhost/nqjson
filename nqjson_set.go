@@ -2545,61 +2545,6 @@ func processArrayAccess(current *interface{}, idx int, isLast, isFinalIndex bool
 }
 
 // processObjectKey processes an object property access
-func processObjectKey(current *interface{}, key string, isLast bool, parent interface{}, lastKey string, lastIndex int, isArrayElement bool, value interface{}, options SetOptions) error {
-	// Navigate to the base object first
-	m, ok := (*current).(map[string]interface{})
-	if !ok {
-		// If not a map, create one
-		if isLast && parent != nil {
-			// If this is the last segment, set an empty map
-			newMap := make(map[string]interface{})
-			setInParent(parent, lastKey, lastIndex, isArrayElement, newMap)
-			m = newMap
-			*current = m
-		} else {
-			return ErrTypeMismatch
-		}
-	}
-
-	// Get or create the value at this key
-	next, exists := m[key]
-	if !exists {
-		if isLast {
-			// If last component, we'll set it below
-			next = make(map[string]interface{})
-			m[key] = next
-		} else {
-			// Create based on next path part
-			// Determine whether to create an array or map based on the nextPart
-			// The caller should have checked if there's a next part already
-			pathParts := strings.Split(options.nextPath, ".")
-			for i, part := range pathParts {
-				if part == key && i < len(pathParts)-1 {
-					nextPart := pathParts[i+1]
-					if strings.Contains(nextPart, "[") || isAllDigits(nextPart) {
-						next = make([]interface{}, 0)
-					} else {
-						next = make(map[string]interface{})
-					}
-					m[key] = next
-					break
-				}
-			}
-
-			// If we couldn't determine the type based on the path, default to a map
-			if next == nil {
-				next = make(map[string]interface{})
-				m[key] = next
-			}
-		}
-	}
-	*current = next
-
-	return nil
-}
-
-// setSimplePath sets a value at a simple path (dot notation or basic array access)
-
 // setInParent sets a value in a parent object or array
 // setInDirectMap sets value in a direct map[string]interface{}
 func setInDirectMap(m map[string]interface{}, key string, value interface{}) {
@@ -3470,7 +3415,7 @@ func replaceValueInContainer(data []byte, baseOffset int, window []byte, lastPar
 		}
 
 		// For arrays, we just replace the value
-		keyStart = valueStart // No separate key storage in array replacement logic here
+		// keyStart is not used for array replacements
 	} else {
 		// Object key replacement
 		keyStart, valueStart, valueEnd = findKeyValueRange(window, finalKey)
@@ -3972,7 +3917,7 @@ func handleTrailingArrayDeletion(parent interface{}, lastKey string) (bool, inte
 		}
 	}
 
-	if arr != nil && len(arr) > 0 {
+	if len(arr) > 0 {
 		// Check if the last element is nil (added during navigation for append)
 		// If so, we need to remove it first, then delete the actual last element
 		actualLen := len(arr)
